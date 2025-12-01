@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-telegram-bot
+gspread
+google-auth
+python-dotenv
