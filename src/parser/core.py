@@ -9,100 +9,196 @@ class ParsedExpense:
     source: str
     description: str
 
+class ParseError(Exception):
+    pass
+
 class ExpenseParser:
-    CURRENCIES = {
-        'rub': 'RUB', 'руб': 'RUB',
-        'usd': 'USD', 'dollar': 'USD',
-        'eur': 'EUR', 'euro': 'EUR',
-        'kzt': 'KZT', 'tenge': 'KZT',
+    CURRENCY_KEYWORDS = {
+        'rub': 'RUB',
+        'руб': 'RUB',
+        'р': 'RUB',
+        'рубль': 'RUB',
+        'рублей': 'RUB',
+        'usd': 'USD',
+        'доллар': 'USD',
+        'dollar': 'USD',
+        'eur': 'EUR',
+        'евро': 'EUR',
+        'euro': 'EUR',
+        'kzt': 'KZT',
+        'тенге': 'KZT',
+        'tenge': 'KZT',
         'clp': 'CLP',
-        'usdt': 'USDT'
+        'песо': 'CLP',
+        'peso': 'CLP',
+        'usdt': 'USDT',
     }
-
-    SOURCES = {
-        'нал': 'Cash', 'налич': 'Cash', 'cash': 'Cash',
-        'тбанк': 'T-Bank', 'tbank': 'T-Bank', 'tinkoff': 'T-Bank',
-        'kzcard': 'KZ Card', 'карта': 'Card'
+    
+    SOURCE_KEYWORDS = {
+        'нал': 'Cash',
+        'наличн': 'Cash',
+        'наличные': 'Cash',
+        'наличка': 'Cash',
+        'cash': 'Cash',
+        'кэш': 'Cash',
+        'кеш': 'Cash',
+        'тбанк': 'TBank',
+        'tbank': 'TBank',
+        'т-банк': 'TBank',
+        't-bank': 'TBank',
+        'тинькофф': 'TBank',
+        'tinkoff': 'TBank',
+        'карта': 'Card',
+        'card': 'Card',
+        'kzcard': 'KZCard',
+        'kz-card': 'KZCard',
+        'казкард': 'KZCard',
+        'ozon': 'Ozon',
+        'озон': 'Ozon',
+        'sber': 'Sber',
+        'сбер': 'Sber',
+        'сберbank': 'Sber',
+        'sberbank': 'Sber',
+        'yandex': 'Yandex',
+        'яндекс': 'Yandex',
+        'alfa': 'Alfa',
+        'альфа': 'Alfa',
+        'альфабанк': 'Alfa',
+        'alfabank': 'Alfa',
+        'travel': 'Travel',
+        'бcc': 'BCC',
+        'bcc': 'BCC',
     }
-
-    def parse(self, text: str) -> ParsedExpense:
-        # Normalize text
-        text = text.strip()
-        parts = text.split()
+    
+    AMOUNT_PATTERN = re.compile(r'[₽$₸]?[-]?\d+(?:[\s.,]\d+)*[₽$₸]?')
+    
+    @classmethod
+    def parse(cls, raw_input: str) -> ParsedExpense:
+        text = raw_input.strip()
+        if not text:
+            raise ParseError("Ошибка: укажите сумму")
         
-        amount = None
-        currency = 'RUB'
-        source = 'Cash'
-        desc_parts = []
+        text_lower = text.lower()
+        tokens = text.split()
         
-        # Regex to find numbers that look like amounts (e.g. 100, 1000, 1 200, 1.200)
-        # We look for a token that consists of digits, optionally separated by dot, comma or space
+        # Find currency
+        currency = cls._find_currency(text_lower, tokens)
         
-        processed_indices = set()
-
-        # Strategy: Iterate through parts to find specific entities
+        # Find all amount candidates
+        candidates = cls._find_amount_candidates(text)
+        if not candidates:
+            raise ParseError("Ошибка: укажите сумму")
         
-        # 1. Find Amount
-        for i, part in enumerate(parts):
-            if i in processed_indices:
-                continue
-            
-            # Clean part to check if it's a number
-            clean_part = re.sub(r'[^\d]', '', part)
-            if not clean_part:
-                continue
-                
-            # Check if original part resembles a number (allows 100, 100.5, 1,200)
-            # We reject parts that are clearly mixed like "item1"
-            if re.match(r'^[\d\s.,]+$', part):
-                # Try to parse
-                try:
-                    # Remove spaces and replace comma with dot for float conversion
-                    normalized_num = part.replace(' ', '').replace(',', '.')
-                    val = float(normalized_num)
-                    amount = int(val) # Integer required
-                    processed_indices.add(i)
-                    break # Stop after finding first number
-                except ValueError:
-                    continue
-
-        if amount is None:
-            raise ValueError("Ошибка: укажите сумму")
-
-        # 2. Find Currency and Source
-        for i, part in enumerate(parts):
-            if i in processed_indices:
-                continue
-            
-            clean_lower = part.lower().strip('.,')
-            
-            if clean_lower in self.CURRENCIES:
-                currency = self.CURRENCIES[clean_lower]
-                processed_indices.add(i)
-                continue
-                
-            if clean_lower in self.SOURCES:
-                source = self.SOURCES[clean_lower]
-                processed_indices.add(i)
-                continue
-            
-            # Remove symbols like ₽, $, ₸
-            if clean_lower in ['₽', '$', '€', '₸']:
-                processed_indices.add(i)
-                continue
-
-        # 3. Description is everything else
-        for i, part in enumerate(parts):
-            if i not in processed_indices:
-                desc_parts.append(part)
-
-        description = " ".join(desc_parts).strip()
-        if not description:
-            description = "Expense"
-
+        # Pick best amount based on currency proximity
+        amount, amount_str, amount_start, amount_end = cls._pick_best_amount(
+            candidates, text, currency, tokens
+        )
+        
+        # Find source
+        source = cls._find_source(text_lower, tokens)
+        
+        # Extract description
+        description = cls._extract_description(
+            text, amount_str, currency, source, tokens
+        )
+        
+        if not description.strip():
+            raise ParseError("Ошибка: укажите описание")
+        
         return ParsedExpense(
             amount=amount,
             currency=currency,
             source=source,
-            description=description
+            description=description.strip()
         )
+    
+    @classmethod
+    def _find_amount_candidates(cls, text: str) -> list:
+        matches = list(cls.AMOUNT_PATTERN.finditer(text))
+        candidates = []
+        
+        for match in matches:
+            match_str = match.group(0)
+            cleaned = re.sub(r'[₽$₸-]', '', match_str).strip()
+            
+            # Remove decimal part (last 1-2 digits after separator)
+            cleaned = re.sub(r'[.,]\d{1,2}$', '', cleaned)
+            
+            # Remove all remaining separators
+            cleaned = re.sub(r'[\s.,]', '', cleaned)
+            
+            if cleaned.isdigit():
+                amt = int(cleaned)
+                if amt > 0:
+                    candidates.append((amt, match_str, match.start(), match.end()))
+        
+        return candidates
+    
+    @classmethod
+    def _find_currency(cls, text_lower: str, tokens: list) -> str:
+        for token in tokens:
+            token_clean = token.lower().strip('.,!?;:-—–)')
+            if token_clean in cls.CURRENCY_KEYWORDS:
+                return cls.CURRENCY_KEYWORDS[token_clean]
+        return 'RUB'
+    
+    @classmethod
+    def _find_source(cls, text_lower: str, tokens: list) -> str:
+        for token in tokens:
+            token_clean = token.lower().strip('.,!?;:-—–)')
+            if token_clean in cls.SOURCE_KEYWORDS:
+                return cls.SOURCE_KEYWORDS[token_clean]
+            for keyword, source in cls.SOURCE_KEYWORDS.items():
+                if token_clean.startswith(keyword):
+                    return source
+        return 'Cash'
+    
+    @classmethod
+    def _pick_best_amount(cls, candidates: list, text: str, currency: str, tokens: list) -> tuple:
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        # Find currency token position
+        curr_token = None
+        for token in tokens:
+            if token.lower().strip('.,!?;:-—–)') in cls.CURRENCY_KEYWORDS:
+                curr_token = token
+                break
+        
+        if curr_token:
+            curr_start = text.find(curr_token)
+            if curr_start != -1:
+                curr_end = curr_start + len(curr_token)
+                
+                # Prefer amount to the left of currency
+                left_candidates = [c for c in candidates if c[3] <= curr_start]
+                if left_candidates:
+                    return max(left_candidates, key=lambda c: c[3])
+                
+                # Otherwise take amount to the right
+                right_candidates = [c for c in candidates if c[2] >= curr_end]
+                if right_candidates:
+                    return min(right_candidates, key=lambda c: c[2])
+        
+        # Default: first candidate
+        return candidates[0]
+    
+    @classmethod
+    def _extract_description(cls, text: str, amount_str: str, currency: str, source: str, tokens: list) -> str:
+        desc = text.replace(amount_str, '')
+        
+        # Remove currency token
+        for token in tokens:
+            token_clean = token.lower().strip('.,!?;:-—–)')
+            if token_clean in cls.CURRENCY_KEYWORDS:
+                desc = desc.replace(token, '')
+                break
+        
+        # Remove source token
+        for token in tokens:
+            token_clean = token.lower().strip('.,!?;:-—–)')
+            if token_clean in cls.SOURCE_KEYWORDS or any(token_clean.startswith(kw) for kw in cls.SOURCE_KEYWORDS):
+                desc = desc.replace(token, '')
+                break
+        
+        return ' '.join(desc.split()).strip()

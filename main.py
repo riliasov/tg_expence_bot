@@ -1,14 +1,14 @@
+import os
 import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import ApplicationBuilder
-from src.config import TELEGRAM_TOKEN, WEBHOOK_URL
+from telegram.ext import Application
+from src.config import settings
 from src.bot.handlers import setup_handlers
 
 app = FastAPI()
 
-# Build Bot Application
-ptb_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+ptb_app = Application.builder().token(settings.telegram_token).build()
 setup_handlers(ptb_app)
 
 @app.on_event("startup")
@@ -16,12 +16,12 @@ async def startup_event():
     await ptb_app.initialize()
     await ptb_app.start()
     
-    # Set Webhook if URL is configured
-    if WEBHOOK_URL:
-        # Ensure trailing slash for set_webhook is correct based on logic
-        webhook_path = f"{WEBHOOK_URL}/webhook"
+    if settings.webhook_url:
+        webhook_path = f"{settings.webhook_url}/webhook"
         await ptb_app.bot.set_webhook(webhook_path)
-        print(f"Webhook set to {webhook_path}")
+        print(f"✅ Webhook set to {webhook_path}")
+    else:
+        print("ℹ️  No webhook URL configured (use for local development with ngrok)")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -33,8 +33,11 @@ async def webhook_handler(request: Request):
     data = await request.json()
     update = Update.de_json(data, ptb_app.bot)
     await ptb_app.process_update(update)
-    return {"status": "ok"}
+    return {"ok": True}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "bot": "expense-tracker"}
 
 if __name__ == "__main__":
-    # Local run
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    ptb_app.run_polling()

@@ -1,24 +1,29 @@
 import os
 import json
+from typing import Optional
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Full URL: https://your-domain.com/webhook
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+class Settings(BaseSettings):
+    telegram_token: str = Field(..., alias="TELEGRAM_TOKEN")
+    webhook_url: Optional[str] = Field(None, alias="WEBHOOK_URL")
+    spreadsheet_id: str = Field(..., alias="SPREADSHEET_ID")
+    google_credentials_json: str = Field(..., alias="GOOGLE_CREDENTIALS_JSON")
+    
+    @field_validator('google_credentials_json')
+    @classmethod
+    def parse_credentials(cls, v: str) -> str:
+        try:
+            json.loads(v)
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("GOOGLE_CREDENTIALS_JSON must be valid JSON string")
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN is missing")
-if not SPREADSHEET_ID:
-    raise ValueError("SPREADSHEET_ID is missing")
-if not GOOGLE_CREDENTIALS_JSON:
-    raise ValueError("GOOGLE_CREDENTIALS_JSON is missing")
-
-# Parse JSON string if provided, otherwise assume it's a file path logic handled by client
-try:
-    GOOGLE_CREDS_DICT = json.loads(GOOGLE_CREDENTIALS_JSON)
-except json.JSONDecodeError:
-    # If not valid JSON string, assume it might be a file path or handle error later
-    GOOGLE_CREDS_DICT = None
+settings = Settings()
