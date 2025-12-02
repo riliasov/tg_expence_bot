@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# ./fast_push.sh "Ваш комментарий" - чтобы запустить
+
 # Check if a commit message was provided
 if [ -z "$1" ]; then
   echo "❌ Error: Please provide a commit message."
