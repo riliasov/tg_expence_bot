@@ -1,8 +1,8 @@
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters
-from src.parser.core import ExpenseParser, ParseError
-from src.sheets.client import sheets_client
-from src.bot.keyboards import get_edit_keyboard
+from src.parser_core import ExpenseParser, ParseError
+from src.sheets_client import get_sheets_client
+from src.bot_keyboards import get_edit_keyboard
 
 WAITING_FOR_NEW_TEXT = 1
 
@@ -13,7 +13,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         expense = parser.parse(text)
-        sheets_client.append_row(expense)
+        get_sheets_client().append_row(expense)
         
         response = (
             f"✅ Добавлено:\n"
@@ -30,7 +30,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        rows = sheets_client.get_last_rows(3)
+        rows = get_sheets_client().get_last_rows(3)
         if not rows:
             await update.message.reply_text("📋 Список пуст.")
             return
@@ -74,7 +74,7 @@ async def process_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         expense = parser.parse(text)
-        sheets_client.update_row(row_num, expense)
+        get_sheets_client().update_row(row_num, expense)
         
         response = (
             f"✅ Запись (строка {row_num}) обновлена:\n"

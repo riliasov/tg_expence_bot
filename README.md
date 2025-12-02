@@ -37,10 +37,10 @@ pip install -r requirements.txt
 
 ### 3. Настройка переменных окружения
 
-Создать `.env` файл:
+Создать `.env` файл в папке `secrets/`:
 
 ```bash
-cp .env.example .env
+cp .env.example secrets/.env
 ```
 
 Заполнить значения:
@@ -118,12 +118,6 @@ if __name__ == "__main__":
 ```bash
 # macOS
 brew install google-cloud-sdk
-
-# Windows
-# Скачать installer с cloud.google.com/sdk
-
-# Linux
-curl https://sdk.cloud.google.com | bash
 ```
 
 ### 2. Аутентификация
@@ -212,26 +206,28 @@ gcloud run services logs read expense-bot --region europe-west1 --limit 50
 
 ```
 telegram-expense-bot/
-├── requirements.txt          # Python зависимости
-├── Dockerfile                # Для Cloud Run
 ├── .env.example              # Шаблон конфигурации
+├── .gitignore                # Git ignore правила
+├── Dockerfile                # Для Cloud Run
+├── README.md                 # Документация
 ├── main.py                   # FastAPI + Telegram webhook
-├── src/
-│   ├── config.py             # Pydantic настройки
-│   ├── parser/
-│   │   └── core.py           # Парсер расходов
-│   ├── sheets/
-│   │   └── client.py         # Google Sheets клиент
-│   └── bot/
-│       ├── handlers.py       # Telegram обработчики
-│       └── keyboards.py      # Inline клавиатуры
-└── README.md
+├── requirements.txt          # Python зависимости
+├── secrets/                  # Секретные данные (не в Git)
+│   ├── .env                  # Переменные окружения
+│   └── planeta_sheets_key.json  # Service account ключ
+└── src/                      # Исходный код
+    ├── __init__.py           # Инициализация пакета
+    ├── bot_handlers.py       # Telegram обработчики
+    ├── bot_keyboards.py      # Inline клавиатуры
+    ├── config.py             # Pydantic настройки
+    ├── parser_core.py        # Парсер расходов
+    └── sheets_client.py      # Google Sheets клиент
 ```
 
 ## Troubleshooting
 
 ### Ошибка: "TELEGRAM_TOKEN is missing"
-- Проверить `.env` файл
+- Проверить `secrets/.env` файл
 - Убедиться что переменная называется `TELEGRAM_TOKEN` (не `TELEGRAM_BOT_TOKEN`)
 
 ### Ошибка: "403 Forbidden" при записи в Sheets

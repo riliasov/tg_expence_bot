@@ -3,7 +3,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from src.config import settings
-from src.parser.core import ParsedExpense
+from src.parser_core import ParsedExpense
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -88,4 +88,10 @@ class GoogleSheetsClient:
         range_name = f"B{row_number}:I{row_number}"
         self.sheet.update(range_name=range_name, values=[updates], value_input_option='USER_ENTERED')
 
-sheets_client = GoogleSheetsClient()
+_sheets_client = None
+
+def get_sheets_client() -> GoogleSheetsClient:
+    global _sheets_client
+    if _sheets_client is None:
+        _sheets_client = GoogleSheetsClient()
+    return _sheets_client

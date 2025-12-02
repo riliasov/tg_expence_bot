@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import Application
 from src.config import settings
-from src.bot.handlers import setup_handlers
+from src.bot_handlers import setup_handlers
 
 app = FastAPI()
 
