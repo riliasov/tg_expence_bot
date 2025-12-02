@@ -142,13 +142,10 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         except ValueError:
             date_fmt = selected_row['date']
 
-        detail_msg = (
-            f"🔍 <b>Детали записи (стр. {row_num}):</b>\n\n"
-            f"📝 {selected_row['description']}\n"
-            f"💰 {selected_row['amount']} {selected_row['currency']}\n"
-            f"💳 {selected_row['source']}\n"
-            f"📅 {date_fmt}\n\n"
-            f"<i>Исходный текст: {selected_row['description']}</i>"
+        detail_msg = (\
+            f"🔍 <b>Детали записи (стр. {row_num}):</b>\n\n"\
+            f"{date_fmt} - <b>{selected_row['amount']} {selected_row['currency']}</b> - {selected_row['description']} - {selected_row['source']}\n\n"\
+            f"<i>Исходный текст: {selected_row['description']}</i>"\
         )
         
         await query.edit_message_text(detail_msg, parse_mode='HTML', reply_markup=get_row_action_keyboard(row_num))

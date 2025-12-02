@@ -73,7 +73,7 @@ class GoogleSheetsClient:
             }
             data.append(entry)
         
-        return data
+        return list(reversed(data))
     
     def update_row(self, row_number: int, expense: ParsedExpense):
         if expense.currency == 'RUB':
