@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQ
 from src.parser_core import ExpenseParser, ParseError
 from src.sheets_client import get_sheets_client
 from src.bot_keyboards import get_last_rows_keyboard, get_row_action_keyboard, get_main_keyboard, get_edit_keyboard
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 WAITING_FOR_NEW_TEXT = 1
 
@@ -43,8 +43,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         expense = parser.parse(text)
-        # Use the timestamp from the message (already includes timezone info)
-        message_time = update.message.date
+        # Convert message time to UTC+5
+        utc_plus_5 = timezone(timedelta(hours=5))
+        message_time = update.message.date.astimezone(utc_plus_5)
         get_sheets_client().append_row(expense, timestamp=message_time)
         
         # New format: ✅ Добавлено: хлеб - 45 RUB - TBank
