@@ -3,7 +3,7 @@ from telegram.constants import ParseMode
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        [KeyboardButton("Посмотреть последние")]
+        [KeyboardButton("Посмотреть последние записи")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -21,12 +21,21 @@ def get_last_rows_keyboard(rows_data: list) -> InlineKeyboardMarkup:
         
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
     
+    keyboard.append([InlineKeyboardButton("🏠 В начало", callback_data="home")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_row_action_keyboard(row_number: int) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_row:{row_number}")],
         [InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_row:{row_number}")],
-        [InlineKeyboardButton("🔙 Вернуться в начало", callback_data="back_to_list")]
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_list")],
+        [InlineKeyboardButton("🏠 В начало", callback_data="home")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_edit_keyboard(row_number: int) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"select_row:{row_number}")],
+        [InlineKeyboardButton("🏠 В начало", callback_data="home")]
     ]
     return InlineKeyboardMarkup(keyboard)
