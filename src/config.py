@@ -23,7 +23,7 @@ class Settings(BaseSettings):
             raise ValueError("GOOGLE_CREDENTIALS_JSON must be valid JSON string")
     
     class Config:
-        env_file = "secrets/.env"
+        env_file = [".env", "secrets/.env"]
         case_sensitive = False
 
 settings = Settings()
