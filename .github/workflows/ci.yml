@@ -40,12 +40,36 @@ jobs:
         fi
         pytest
 
-  build-docker:
+  deploy:
     runs-on: ubuntu-latest
     needs: test
+    if: github.ref == 'refs/heads/main'
     
     steps:
     - uses: actions/checkout@v3
     
-    - name: Build Docker image
-      run: docker build . --file Dockerfile --tag expense-bot:$(date +%s)
+    - name: Google Auth
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+
+    - name: Build and Push Docker Image
+      run: |
+        gcloud auth configure-docker
+        docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/tg-expense-bot:${{ github.sha }} .
+        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/tg-expense-bot:${{ github.sha }}
+
+    - name: Deploy to Cloud Run
+      uses: google-github-actions/deploy-cloudrun@v1
+      with:
+        service: tg-expense-bot
+        image: gcr.io/${{ secrets.GCP_PROJECT_ID }}/tg-expense-bot:${{ github.sha }}
+        region: us-central1
+        env_vars: |
+          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+          SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }}
+        secrets: |
+          GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest
