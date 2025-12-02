@@ -24,8 +24,11 @@ class GoogleSheetsClient:
             self._sheet = self.client.open_by_key(self.sheet_id).sheet1
         return self._sheet
     
-    def append_row(self, expense: ParsedExpense):
-        now_iso = datetime.utcnow().isoformat()
+    def append_row(self, expense: ParsedExpense, timestamp: datetime = None):
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+        
+        now_iso = timestamp.isoformat()
         
         if expense.currency == 'RUB':
             fx = 1.0

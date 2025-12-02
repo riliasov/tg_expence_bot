@@ -43,7 +43,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         expense = parser.parse(text)
-        get_sheets_client().append_row(expense)
+        # Use the timestamp from the message (user's device time)
+        message_time = datetime.fromtimestamp(update.message.date.timestamp())
+        get_sheets_client().append_row(expense, timestamp=message_time)
         
         # New format: ✅ Добавлено: хлеб - 45 RUB - TBank
         response = f"✅ Добавлено: {expense.description} - {expense.amount} {expense.currency} - {expense.source}"
