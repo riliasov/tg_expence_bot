@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-PROJECT_ID="your-project-id" # REPLACE THIS
+PROJECT_ID="boreal-matrix-433916-t9"
 SERVICE_NAME="tg-expense-bot"
 REGION="us-central1"
 
@@ -22,8 +22,13 @@ gcloud run deploy $SERVICE_NAME \
   --platform managed \
   --region $REGION \
   --allow-unrelated-histories \
-  --set-env-vars "TELEGRAM_TOKEN=${TELEGRAM_TOKEN},SPREADSHEET_ID=${SPREADSHEET_ID}" \
-  --set-secrets "GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest"
+  --set-secrets "TELEGRAM_TOKEN=telegram-token:latest,SPREADSHEET_ID=spreadsheet-id:latest,WEBHOOK_URL=webhook-url:latest,GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest"
+
+# Note: Ensure you have created the following secrets in Secret Manager:
+# - telegram-token
+# - spreadsheet-id
+# - webhook-url
+# - google-credentials-secret
 
 # Note: You need to create the secret 'google-credentials-secret' in Secret Manager first:
 # gcloud secrets create google-credentials-secret --replication-policy="automatic"
