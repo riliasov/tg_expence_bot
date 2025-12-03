@@ -2,8 +2,8 @@
 
 # Configuration
 PROJECT_ID="boreal-matrix-433916-t9"
-SERVICE_NAME="tg-expense-bot"
-REGION="us-central1"
+SERVICE_NAME="tg-expence-bot"
+REGION="europe-west1"
 
 echo "🚀 Deploying to Google Cloud Run..."
 
@@ -21,7 +21,6 @@ gcloud run deploy $SERVICE_NAME \
   --source . \
   --platform managed \
   --region $REGION \
-  --allow-unrelated-histories \
   --set-secrets "TELEGRAM_TOKEN=telegram-token:latest,SPREADSHEET_ID=spreadsheet-id:latest,WEBHOOK_URL=webhook-url:latest,GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest"
 
 # Note: Ensure you have created the following secrets in Secret Manager:
