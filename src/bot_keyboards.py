@@ -16,7 +16,7 @@ def get_last_rows_keyboard(rows_data: list) -> InlineKeyboardMarkup:
         amt = entry['amount']
         curr = entry['currency']
         
-        btn_text = f"{i}. {amt} {curr} - {desc}..."
+        btn_text = f"Запись {i}"
         callback_data = f"select_row:{row_num}"
         
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])

@@ -12,8 +12,8 @@ parser = ExpenseParser()
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот для учета расходов.\n"
-        "Просто отправь мне сумму и описание (например: 'хлеб 45').\n"
-        "Используй меню для управления.",
+        "Просто отправь мне сумму и описание, например:\n"
+        "продукты 500 тбанк\n",
         reply_markup=get_main_keyboard()
     )
 
@@ -22,9 +22,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 <b>Справка по командам:</b>\n\n"
         "📝 <b>Добавление расхода:</b>\n"
         "Просто напишите сообщение, например:\n"
-        "• <i>хлеб 45</i>\n"
-        "• <i>такси 500 сбер</i>\n"
-        "• <i>1000 usd подарок</i>\n\n"
+        "• <i>продукты 500</i>\n"
+        "• <i>такси 300 сбер</i>\n"
+        "• <i>30 usd подарок</i>\n\n"
         "🎛 <b>Меню:</b>\n"
         "• <b>Посмотреть последние</b> — список последних 3 записей с возможностью редактирования и удаления.\n\n"
         "🛠 <b>Команды:</b>\n"
@@ -48,8 +48,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_time = update.message.date.astimezone(utc_plus_5)
         get_sheets_client().append_row(expense, timestamp=message_time)
         
-        # New format: ✅ Добавлено: хлеб - 45 RUB - TBank
-        response = f"✅ Добавлено: {expense.description} - {expense.amount} {expense.currency} - {expense.source}"
+        # New format: ✅ Добавлено: продукты | 500 RUB | TBank
+        response = f"✅ Добавлено: {expense.description} | {expense.amount} {expense.currency} | {expense.source}"
         await update.message.reply_text(response, reply_markup=get_main_keyboard())
         
     except ParseError as e:
@@ -59,22 +59,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        rows = get_sheets_client().get_last_rows(3)
+        rows = get_sheets_client().get_last_rows(4)
         if not rows:
             await update.message.reply_text("📋 Список пуст.", reply_markup=get_main_keyboard())
             return
         
         msg = "📋 <b>Последние записи:</b>\n\n"
         for i, r in enumerate(rows, 1):
-            # Parse date: 2025-12-03T01:22:04+05:00 -> HH:MM DD.MM.YYYY
+            # Parse date: 12-03T01:22:04+05:00 -> HH:MM DD/MM
             try:
                 dt = datetime.fromisoformat(r['date'])
-                date_fmt = dt.strftime("%H:%M %d.%m.%Y")
+                date_fmt = dt.strftime("%H:%M %d/%m")
             except ValueError:
                 date_fmt = r['date'] # Fallback
 
-            # New format: 19:59 02.12.2025 - 300 RUB - молоко - Cash
-            msg += f"{i}. {date_fmt} - <b>{r['amount']} {r['currency']}</b> - {r['description']} - {r['source']}\n"
+            # New format: 03:28 04/12 500 RUB Cash (исходный текст)
+            msg += f"{i}. {date_fmt} {r['amount']} {r['currency']} {r['source']} (<i>{r['description']}</i>)\n"
         
         kb = get_last_rows_keyboard(rows)
         # Store rows in context to avoid re-fetching if possible, or just fetch again
@@ -100,23 +100,23 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         await query.edit_message_text(
             "🏠 Главное меню\n\n"
-            "Просто отправь мне сумму и описание (например: 'хлеб 45')."
+            "Просто отправь мне сумму и описание, например: продукты 500 тбанк."
         )
         return ConversationHandler.END
         
     elif data == "back_to_list":
         # Re-render list
         try:
-            rows = get_sheets_client().get_last_rows(3)
+            rows = get_sheets_client().get_last_rows(4)
             msg = "📋 <b>Последние записи:</b>\n\n"
             for i, r in enumerate(rows, 1):
                 try:
                     dt = datetime.fromisoformat(r['date'])
-                    date_fmt = dt.strftime("%H:%M %d.%m.%Y")
+                    date_fmt = dt.strftime("%H:%M %d/%m")
                 except ValueError:
                     date_fmt = r['date']
                 
-                msg += f"{i}. {date_fmt} - <b>{r['amount']} {r['currency']}</b> - {r['description']} - {r['source']}\n"
+                msg += f"{i}. {date_fmt} {r['amount']} {r['currency']} {r['source']} (<i>{r['description']}</i>)\n"
 
             kb = get_last_rows_keyboard(rows)
             await query.edit_message_text(msg, parse_mode='HTML', reply_markup=kb)
@@ -129,7 +129,7 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         rows = context.user_data.get('last_rows', [])
         # If not in context (e.g. bot restart), fetch again
         if not rows:
-            rows = get_sheets_client().get_last_rows(3)
+            rows = get_sheets_client().get_last_rows(4)
         
         selected_row = next((r for r in rows if r['row_number'] == row_num), None)
         
@@ -141,13 +141,13 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Show details with original raw text
         try:
             dt = datetime.fromisoformat(selected_row['date'])
-            date_fmt = dt.strftime("%H:%M %d.%m.%Y")
+            date_fmt = dt.strftime("%H:%M %d/%m")
         except ValueError:
             date_fmt = selected_row['date']
 
         detail_msg = (\
             f"🔍 <b>Детали записи (стр. {row_num}):</b>\n\n"\
-            f"{date_fmt} - <b>{selected_row['amount']} {selected_row['currency']}</b> - {selected_row['description']} - {selected_row['source']}\n\n"\
+            f"{date_fmt} {selected_row['amount']} {selected_row['currency']} {selected_row['source']} (<i>{selected_row['description']}</i>)\n\n"\
             f"<i>Исходный текст: {selected_row['description']}</i>"\
         )
         
@@ -176,7 +176,7 @@ async def start_edit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Get the original row data to show
         rows = context.user_data.get('last_rows', [])
         if not rows:
-            rows = get_sheets_client().get_last_rows(3)
+            rows = get_sheets_client().get_last_rows(4)
             context.user_data['last_rows'] = rows
         
         selected_row = next((r for r in rows if r['row_number'] == row_num), None)
@@ -205,7 +205,8 @@ async def process_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         get_sheets_client().update_row(row_num, expense)
         
         # Single line format like primary record
-        response = f"✅ Обновлено (стр. {row_num}): {expense.description} - {expense.amount} {expense.currency} - {expense.source}"
+        response = f"✅ Обновлено (стр. {row_num}):\n"
+        f"{expense.description} - {expense.amount} {expense.currency} - {expense.source}"
         await update.message.reply_text(response, reply_markup=get_main_keyboard())
         del context.user_data['editing_row']
         return ConversationHandler.END
