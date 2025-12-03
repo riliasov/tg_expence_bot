@@ -21,7 +21,7 @@ gcloud run deploy $SERVICE_NAME \
   --source . \
   --platform managed \
   --region $REGION \
-  --set-secrets "TELEGRAM_TOKEN=telegram-token:latest,SPREADSHEET_ID=spreadsheet-id:latest,WEBHOOK_URL=webhook-url:latest,GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest"
+  --set-secrets "TELEGRAM_TOKEN=TELEGRAM_TOKEN:latest,SPREADSHEET_ID=SPREADSHEET_ID:latest,WEBHOOK_URL=WEBHOOK_URL:latest,GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest"
 
 # Note: Ensure you have created the following secrets in Secret Manager:
 # - telegram-token
