@@ -1,8 +1,10 @@
 import os
+import asyncio
 import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import Application
+from telegram.error import RetryAfter, TimedOut
 from src.config import settings
 from src.bot_handlers import setup_handlers
 
@@ -18,8 +20,30 @@ async def startup_event():
     
     if settings.webhook_url:
         webhook_path = f"{settings.webhook_url}/webhook"
-        await ptb_app.bot.set_webhook(webhook_path)
-        print(f"✅ Webhook set to {webhook_path}")
+        
+        # Retry logic for webhook setup (Telegram rate limiting)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await ptb_app.bot.set_webhook(webhook_path)
+                print(f"✅ Webhook set to {webhook_path}")
+                break
+            except RetryAfter as e:
+                if attempt < max_retries - 1:
+                    wait_time = int(e.retry_after) + 1
+                    print(f"⏳ Rate limited. Waiting {wait_time} seconds before retry...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"⚠️ Failed to set webhook after {max_retries} attempts: {e}")
+            except TimedOut as e:
+                if attempt < max_retries - 1:
+                    print(f"⏳ Timeout. Retrying in 2 seconds...")
+                    await asyncio.sleep(2)
+                else:
+                    print(f"⚠️ Failed to set webhook (timeout) after {max_retries} attempts: {e}")
+            except Exception as e:
+                print(f"❌ Unexpected error setting webhook: {e}")
+                break
     else:
         print("ℹ️  No webhook URL configured (use for local development with ngrok)")
 

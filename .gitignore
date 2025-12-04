@@ -47,8 +47,13 @@ service_account.json
 .coverage
 htmlcov/
 .tox/
+coverage.xml
 
 # OS
 .DS_Store
 Thumbs.db
 backup_copy/
+
+# Logs
+*.log
+logs/

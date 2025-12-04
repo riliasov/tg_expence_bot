@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/tg-expense-bot', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/tg-expence-bot', '.']
 
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/tg-expense-bot']
+    args: ['push', 'gcr.io/$PROJECT_ID/tg-expence-bot']
 
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -13,12 +13,16 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'tg-expense-bot'
+      - 'tg-expence-bot'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/tg-expense-bot'
+      - 'gcr.io/$PROJECT_ID/tg-expence-bot'
       - '--region'
-      - 'us-central1'
+      - 'europe-west1'
       - '--platform'
       - 'managed'
+      - '--set-secrets'
+      - 'TELEGRAM_TOKEN=TELEGRAM_TOKEN:latest,SPREADSHEET_ID=SPREADSHEET_ID:latest,WEBHOOK_URL=WEBHOOK_URL:latest,GOOGLE_CREDENTIALS_JSON=google-credentials-secret:latest'
+
 images:
-  - 'gcr.io/$PROJECT_ID/tg-expense-bot'
+  - 'gcr.io/$PROJECT_ID/tg-expence-bot'
+

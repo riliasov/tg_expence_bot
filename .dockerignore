@@ -7,3 +7,15 @@ secrets/
 *.pyo
 *.pyd
 .DS_Store
+
+# Development and CI/CD
+.github/
+tests/
+*.md
+README.md
+.pytest_cache/
+
+# Logs
+*.log
+logs/
+

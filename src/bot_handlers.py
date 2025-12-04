@@ -1,15 +1,28 @@
+"""
+Обработчики команд и сообщений Telegram бота.
+Управляет взаимодействием пользователя с ботом и обработкой расходов.
+"""
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters
 from src.parser_core import ExpenseParser, ParseError
 from src.sheets_client import get_sheets_client
 from src.bot_keyboards import get_last_rows_keyboard, get_row_action_keyboard, get_main_keyboard, get_edit_keyboard
+from src.logger import setup_logger
 from datetime import datetime, timezone, timedelta
 
+# Состояние для ConversationHandler при редактировании
 WAITING_FOR_NEW_TEXT = 1
 
+# Инициализация парсера и логгера
 parser = ExpenseParser()
+logger = setup_logger(__name__)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик команды /start.
+    Отправляет приветственное сообщение с инструкцией.
+    """
+    logger.info("Команда /start вызвана")
     await update.message.reply_text(
         "👋 Привет! Я бот для учета расходов.\n"
         "Просто отправь мне сумму и описание, например:\n"
@@ -18,6 +31,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик команды /help.
+    Отправляет подробную справку по использованию бота.
+    """
+    logger.info("Команда /help вызвана")
     help_text = (
         "🤖 <b>Справка по командам:</b>\n\n"
         "📝 <b>Добавление расхода:</b>\n"
@@ -26,7 +44,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <i>такси 300 сбер</i>\n"
         "• <i>30 usd подарок</i>\n\n"
         "🎛 <b>Меню:</b>\n"
-        "• <b>Посмотреть последние</b> — список последних 3 записей с возможностью редактирования и удаления.\n\n"
+        "• <b>Посмотреть последние</b> — список последних 4 записей с возможностью редактирования и удаления.\n\n"
         "🛠 <b>Команды:</b>\n"
         "/start — Перезапуск и показ меню\n"
         "/help — Эта справка\n"
@@ -35,54 +53,72 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode='HTML')
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик текстовых сообщений.
+    Парсит расход или обрабатывает кнопки меню.
+    """
     text = update.message.text
     
+    # Обработка кнопки меню
     if text == "Посмотреть последние записи":
         await last_command(update, context)
         return
     
     try:
         expense = parser.parse(text)
-        # Convert message time to UTC+5
+        # Конвертируем время сообщения в UTC+5
         utc_plus_5 = timezone(timedelta(hours=5))
         message_time = update.message.date.astimezone(utc_plus_5)
         get_sheets_client().append_row(expense, timestamp=message_time)
         
-        # New format: ✅ Добавлено: продукты | 500 RUB | TBank
+        logger.info(f"Расход добавлен: {expense.amount} {expense.currency}, источник: {expense.source}")
+        
+        # Формат ответа: ✅ Добавлено: продукты | 500 RUB | TBank
         response = f"✅ Добавлено: {expense.description} | {expense.amount} {expense.currency} | {expense.source}"
         await update.message.reply_text(response, reply_markup=get_main_keyboard())
         
     except ParseError as e:
+        logger.warning(f"Ошибка парсинга: {e}")
         await update.message.reply_text(f"⚠️ {str(e)}")
     except Exception as e:
+        logger.error(f"Системная ошибка при обработке расхода: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Системная ошибка: {str(e)}")
 
 async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик команды /last и кнопки "Посмотреть последние записи".
+    Показывает последние 4 записи с inline-клавиатурой для действий.
+    """
     try:
         rows = get_sheets_client().get_last_rows(4)
         if not rows:
+            logger.info("Запрошены последние записи, но таблица пуста")
             await update.message.reply_text("📋 Список пуст.", reply_markup=get_main_keyboard())
             return
         
         msg = "📋 <b>Последние записи:</b>\n\n"
         for i, r in enumerate(rows, 1):
-            # Parse date: 12-03T01:22:04+05:00 -> HH:MM DD/MM
+            # Парсим дату из формата DD.MM.YYYY HH:MM -> HH:MM DD/MM
             try:
-                dt = datetime.fromisoformat(r['date'])
+                # Формат: 04.12.2024 15:30
+                dt = datetime.strptime(r['date'], "%d.%m.%Y %H:%M")
                 date_fmt = dt.strftime("%H:%M %d/%m")
             except ValueError:
-                date_fmt = r['date'] # Fallback
+                # Fallback: если формат не совпадает, показываем как есть
+                date_fmt = r['date']
 
-            # New format: 03:28 04/12 500 RUB Cash (исходный текст)
+            # Формат вывода: 03:28 04/12 500 RUB Cash (исходный текст)
             msg += f"{i}. {date_fmt} {r['amount']} {r['currency']} {r['source']} (<i>{r['description']}</i>)\n"
         
         kb = get_last_rows_keyboard(rows)
-        # Store rows in context to avoid re-fetching if possible, or just fetch again
+        # Сохраняем записи в контексте для избежания повторных запросов
         context.user_data['last_rows'] = rows
         
+        logger.info(f"Показаны последние {len(rows)} записи")
         await update.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
 
     except Exception as e:
+        logger.error(f"Ошибка при получении последних записей: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Ошибка получения данных: {str(e)}")
 
 async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,7 +147,7 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             msg = "📋 <b>Последние записи:</b>\n\n"
             for i, r in enumerate(rows, 1):
                 try:
-                    dt = datetime.fromisoformat(r['date'])
+                    dt = datetime.strptime(r['date'], "%d.%m.%Y %H:%M")
                     date_fmt = dt.strftime("%H:%M %d/%m")
                 except ValueError:
                     date_fmt = r['date']
@@ -140,7 +176,7 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Show details with original raw text
         try:
-            dt = datetime.fromisoformat(selected_row['date'])
+            dt = datetime.strptime(selected_row['date'], "%d.%m.%Y %H:%M")
             date_fmt = dt.strftime("%H:%M %d/%m")
         except ValueError:
             date_fmt = selected_row['date']
@@ -162,6 +198,7 @@ async def navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             # User asked for "Return to start" button, but "Delete" usually implies done.
             # Let's just leave it as "Deleted". User can click "View Last" again.
         except Exception as e:
+            logger.error(f"Ошибка при удалении строки {row_num}: {e}", exc_info=True)
             await query.edit_message_text(f"❌ Ошибка удаления: {str(e)}")
 
 async def start_edit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,6 +241,8 @@ async def process_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expense = parser.parse(text)
         get_sheets_client().update_row(row_num, expense)
         
+        logger.info(f"Запись {row_num} обновлена: {expense.amount} {expense.currency}")
+        
         # Single line format like primary record
         response = f"✅ Обновлено (стр. {row_num}):\n"
         f"{expense.description} - {expense.amount} {expense.currency} - {expense.source}"
@@ -212,9 +251,11 @@ async def process_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
         
     except ParseError as e:
+        logger.warning(f"Ошибка парсинга при редактировании: {e}")
         await update.message.reply_text(f"⚠️ {str(e)}")
         return WAITING_FOR_NEW_TEXT
     except Exception as e:
+        logger.error(f"Ошибка при обновлении строки {row_num}: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
         return ConversationHandler.END
 
