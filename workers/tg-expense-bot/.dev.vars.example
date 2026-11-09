@@ -1,0 +1,9 @@
+# Шаблон для локальной разработки (`wrangler dev`). Скопируйте в .dev.vars и заполните.
+# .dev.vars игнорируется git. НЕ коммитьте реальные значения.
+TELEGRAM_TOKEN=
+WEBHOOK_SECRET=
+ALLOWED_USER_ID=
+SPREADSHEET_ID=
+# gid листа из URL таблицы (#gid=...). Обязателен, без значения по умолчанию.
+SHEET_GID=
+GOOGLE_SERVICE_ACCOUNT_JSON=

@@ -1,0 +1,47 @@
+name: Worker CI (tg-expense-bot)
+
+# Проверяет только Cloudflare Worker. Деплой, доступ к Cloudflare и смена webhook здесь не выполняются.
+on:
+  pull_request:
+    paths:
+      - 'workers/tg-expense-bot/**'
+      - '.github/workflows/worker-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workers/tg-expense-bot/**'
+      - '.github/workflows/worker-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and Wrangler dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: workers/tg-expense-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/tg-expense-bot/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit and webhook tests (node:test)
+        run: npm test
+
+      - name: Wrangler dry-run build (no deploy)
+        run: npm run build:check
