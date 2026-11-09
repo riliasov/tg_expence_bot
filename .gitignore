@@ -57,3 +57,11 @@ backup_copy/
 # Logs
 *.log
 logs/
+# Cloudflare Worker (workers/tg-expense-bot)
+node_modules/
+dist/
+.dev.vars
+.wrangler/
+# package.json и lock-файл Worker'а нужны в git, хотя правило *.json выше их скрывает
+!workers/tg-expense-bot/package.json
+!workers/tg-expense-bot/package-lock.json

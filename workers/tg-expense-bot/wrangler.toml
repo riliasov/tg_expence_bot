@@ -1,0 +1,11 @@
+name = "tg-expense-bot"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Не секреты. Секреты задаются через `wrangler secret put` (см. README.md).
+[vars]
+# gid листа из URL таблицы (#gid=...). 0 — обычно первый лист.
+SHEET_GID = "0"
+# Часовой пояс для даты записи (UTC+5, как в Python-версии).
+TZ_OFFSET_HOURS = "5"
