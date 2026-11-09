@@ -1,5 +1,6 @@
 // Логика бота: маршрутизация обновлений Telegram. Состояния нет:
-// режим редактирования определяется по reply на сообщение-подсказку с "(стр. N)".
+// режим редактирования определяется по reply на подсказку с "(стр. N, #fingerprint)".
+// Любое действие над строкой сначала сверяет fingerprint, чтобы не затронуть сдвинувшуюся строку.
 
 import { parseExpense, ParseError } from './parser.js';
 import * as sheets from './sheets.js';
@@ -7,7 +8,7 @@ import * as tg from './telegram.js';
 import { esc, formatAmount, formatShortDate } from './format.js';
 
 const LIST_BUTTON = 'Посмотреть последние записи';
-const EDIT_MARK = /Редактирование строки \(стр\. (\d+)\)/;
+const EDIT_MARK = /Редактирование строки \(стр\. (\d+), #([0-9a-f]{8})\)/;
 
 const MAIN_KEYBOARD = {
   reply_markup: { keyboard: [[{ text: LIST_BUTTON }]], resize_keyboard: true },
@@ -37,8 +38,10 @@ const HOME_TEXT =
   '🏠 Главное меню\n\n' +
   'Просто отправь мне сумму и описание, например: продукты 500 тбанк.';
 
+const STALE_TEXT = '⚠️ Запись изменилась или не найдена. Откройте список заново: /last';
+
 function describeEntry(entry) {
-  return `${formatShortDate(entry.date)} ${esc(entry.amount)} ${entry.currency} ${esc(entry.source)} (<i>${esc(entry.raw_text)}</i>)`;
+  return `${formatShortDate(entry.date)} ${esc(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)} (<i>${esc(entry.raw_text)}</i>)`;
 }
 
 function renderList(rows) {
@@ -57,12 +60,14 @@ function renderDetails(entry) {
   );
 }
 
-function rowActionKeyboard(rowNumber) {
+function rowActionKeyboard(entry) {
+  const n = entry.row_number;
+  const fp = sheets.fingerprint(entry);
   return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '✏️ Редактировать', callback_data: `edit_row:${rowNumber}` }],
-        [{ text: '🗑 Удалить', callback_data: `delete_row:${rowNumber}` }],
+        [{ text: '✏️ Редактировать', callback_data: `edit_row:${n}:${fp}` }],
+        [{ text: '🗑 Удалить', callback_data: `delete_row:${n}:${fp}` }],
         [{ text: '🔙 Назад', callback_data: 'back_to_list' }],
         [{ text: '🏠 В начало', callback_data: 'home' }],
       ],
@@ -91,7 +96,7 @@ async function handleText(env, msg) {
 
   const replyTo = msg.reply_to_message;
   const editMatch = replyTo?.from?.is_bot ? EDIT_MARK.exec(replyTo.text ?? '') : null;
-  if (editMatch) return handleEditReply(env, chatId, msg, Number(editMatch[1]));
+  if (editMatch) return handleEditReply(env, chatId, msg, Number(editMatch[1]), editMatch[2]);
 
   return handleAdd(env, chatId, msg, text);
 }
@@ -111,16 +116,21 @@ async function handleAdd(env, chatId, msg, text) {
   return tg.sendMessage(env, chatId, reply, MAIN_KEYBOARD);
 }
 
-async function handleEditReply(env, chatId, msg, rowNumber) {
+async function handleEditReply(env, chatId, msg, rowNumber, fp) {
   let expense;
   try {
     expense = parseExpense(msg.text);
   } catch (err) {
     if (err instanceof ParseError) {
-      // Остаёмся в режиме редактирования: пользователь может ответить на то же сообщение ещё раз.
+      // Остаёмся в режиме редактирования: пользователь может ответить на ту же подсказку ещё раз.
       return tg.sendMessage(env, chatId, `⚠️ ${esc(err.message)}`);
     }
     throw err;
+  }
+
+  const current = await sheets.getRow(env, rowNumber);
+  if (!current || sheets.fingerprint(current) !== fp) {
+    return tg.sendMessage(env, chatId, STALE_TEXT, MAIN_KEYBOARD);
   }
 
   await sheets.updateRow(env, rowNumber, expense);
@@ -134,7 +144,7 @@ async function handleCallback(env, cq) {
   await tg.answerCallback(env, cq.id);
   const chatId = cq.message.chat.id;
   const messageId = cq.message.message_id;
-  const [action, arg] = String(cq.data ?? '').split(':');
+  const [action, arg, fp] = String(cq.data ?? '').split(':');
   const rowNumber = Number(arg);
 
   switch (action) {
@@ -150,27 +160,55 @@ async function handleCallback(env, cq) {
 
     case 'select_row': {
       const entry = await sheets.getRow(env, rowNumber);
-      if (!entry) return tg.editMessage(env, chatId, messageId, '⚠️ Запись не найдена. Обновите список.');
-      return tg.editMessage(env, chatId, messageId, renderDetails(entry), rowActionKeyboard(rowNumber));
+      if (!entry) return tg.editMessage(env, chatId, messageId, '⚠️ Запись не найдена. Обновите список: /last');
+      return tg.editMessage(env, chatId, messageId, renderDetails(entry), rowActionKeyboard(entry));
     }
 
     case 'edit_row': {
       const entry = await sheets.getRow(env, rowNumber);
-      if (!entry) return tg.sendMessage(env, chatId, '⚠️ Запись не найдена. Обновите список.');
-      // Подсказка с force_reply: ответ на неё несёт номер строки в тексте родительского сообщения.
+      if (!entry || sheets.fingerprint(entry) !== fp) return tg.sendMessage(env, chatId, STALE_TEXT);
+      // Подсказка с force_reply: ответ на неё несёт номер строки и fingerprint в тексте родителя.
       return tg.sendMessage(
         env,
         chatId,
-        `✏️ Редактирование строки (стр. ${rowNumber})\n` +
+        `✏️ Редактирование строки (стр. ${rowNumber}, #${fp})\n` +
           `Исходный текст: <code>${esc(entry.raw_text)}</code>\n\n` +
           'Ответьте на это сообщение новым текстом записи. /cancel — отмена.',
         { reply_markup: { force_reply: true, input_field_placeholder: 'продукты 500 тбанк' } },
       );
     }
 
-    case 'delete_row':
+    case 'delete_row': {
+      // Шаг 1: только запрос подтверждения, без изменений в таблице.
+      const entry = await sheets.getRow(env, rowNumber);
+      if (!entry || sheets.fingerprint(entry) !== fp) {
+        return tg.editMessage(env, chatId, messageId, STALE_TEXT);
+      }
+      return tg.editMessage(
+        env,
+        chatId,
+        messageId,
+        `⚠️ <b>Удалить запись (стр. ${rowNumber})?</b>\n\n${describeEntry(entry)}\n\nДействие нельзя отменить.`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🗑 Да, удалить', callback_data: `confirm_delete:${rowNumber}:${fp}` }],
+              [{ text: '✖️ Нет, назад', callback_data: `select_row:${rowNumber}` }],
+            ],
+          },
+        },
+      );
+    }
+
+    case 'confirm_delete': {
+      // Шаг 2: повторная проверка fingerprint прямо перед удалением.
+      const entry = await sheets.getRow(env, rowNumber);
+      if (!entry || sheets.fingerprint(entry) !== fp) {
+        return tg.editMessage(env, chatId, messageId, STALE_TEXT);
+      }
       await sheets.deleteRow(env, rowNumber);
       return tg.editMessage(env, chatId, messageId, '✅ Запись удалена.');
+    }
 
     default:
       return null;
@@ -178,11 +216,16 @@ async function handleCallback(env, cq) {
 }
 
 /**
- * Обрабатывает один update Telegram. Чужие пользователи игнорируются без ответа.
+ * Обрабатывает один update Telegram.
+ * Работает только с личным чатом владельца; всё остальное игнорируется без ответа.
+ * Ошибки логируются и показываются владельцу в чате (Telegram не повторяет update: см. README).
  */
 export async function handleUpdate(env, update) {
   const from = update?.message?.from ?? update?.callback_query?.from;
-  if (!from || String(from.id) !== String(env.ALLOWED_USER_ID)) return;
+  const chat = update?.message?.chat ?? update?.callback_query?.message?.chat;
+  const isOwner = from && String(from.id) === String(env.ALLOWED_USER_ID);
+  const isPrivateOwnerChat = chat?.type === 'private' && String(chat.id) === String(from?.id);
+  if (!isOwner || !isPrivateOwnerChat) return;
 
   try {
     if (update.callback_query) return await handleCallback(env, update.callback_query);
@@ -190,10 +233,7 @@ export async function handleUpdate(env, update) {
     return null;
   } catch (err) {
     console.error('update failed:', err?.message);
-    const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
-    if (chatId) {
-      await tg.sendMessage(env, chatId, `❌ Системная ошибка: ${esc(err?.message)}`).catch(() => {});
-    }
+    await tg.sendMessage(env, chat.id, `❌ Системная ошибка: ${esc(err?.message)}`).catch(() => {});
     return null;
   }
 }

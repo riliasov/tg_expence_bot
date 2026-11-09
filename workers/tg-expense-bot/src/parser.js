@@ -7,6 +7,8 @@
 
 export class ParseError extends Error {}
 
+export const MAX_INPUT_LENGTH = 200;
+
 const CURRENCY = new Map(Object.entries({
   rub: 'RUB', 'руб': 'RUB', 'р': 'RUB', 'рубль': 'RUB', 'рублей': 'RUB',
   usd: 'USD', 'доллар': 'USD', dollar: 'USD',
@@ -118,8 +120,12 @@ function pickBestAmount(candidates, tokens, currencyIndex) {
  * @throws {ParseError}
  */
 export function parseExpense(raw) {
-  const text = String(raw ?? '').trim();
+  // Управляющие символы (включая переводы строк) заменяются пробелом; длина ограничена.
+  const text = String(raw ?? '').replace(/[\u0000-\u001F\u007F]/g, ' ').trim();
   if (!text) throw new ParseError('Ошибка: укажите сумму');
+  if (text.length > MAX_INPUT_LENGTH) {
+    throw new ParseError(`Ошибка: текст длиннее ${MAX_INPUT_LENGTH} символов`);
+  }
 
   const tokens = tokenize(text);
   const candidates = findAmountCandidates(text);

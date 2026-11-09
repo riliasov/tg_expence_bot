@@ -1,5 +1,8 @@
 // Google Sheets через REST API без SDK: JWT service account подписывается WebCrypto (RS256).
-// Токен и импортированный ключ кэшируются в памяти isolate (KV/D1 не используются).
+// Токен, импортированный ключ и название листа кэшируются в памяти isolate (KV/D1 не используются).
+//
+// Инвариант безопасности: каждая операция с листом сначала резолвит title по SHEET_GID
+// и адресует только его. Если SHEET_GID не задан или не найден — запись блокируется (fail closed).
 
 import { formatSheetDate } from './format.js';
 
@@ -7,11 +10,11 @@ const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const TOKEN_TTL_SEC = 3600;
-const COLS = 9; // A:I
 
 const enc = new TextEncoder();
 let keyCache = null; // { pem, key }
 let tokenCache = null; // { token, expiresAt }
+let sheetCache = null; // { key: "<spreadsheetId>:<gid>", title }
 
 export function b64url(bytes) {
   let bin = '';
@@ -87,20 +90,56 @@ async function sheetsCall(env, method, path, body) {
   return data;
 }
 
-/** Поля B..I для одной записи (без даты, которая лежит в A). */
-export function expenseCells(expense) {
-  const isRub = expense.currency === 'RUB';
-  return [
-    expense.amount,
-    expense.currency,
-    isRub ? 1 : '',
-    isRub ? expense.amount : '',
-    '', // F: категория (заполняется вручную)
-    '', // G: подкатегория
-    expense.raw_text,
-    expense.source,
-  ];
+/** SHEET_GID обязателен и должен быть целым неотрицательным числом. */
+export function requireGid(env) {
+  const raw = String(env.SHEET_GID ?? '').trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error('SHEET_GID не задан или не число. Запись заблокирована.');
+  }
+  return Number(raw);
 }
+
+/**
+ * Находит title листа по gid. Один дополнительный запрос на холодный isolate.
+ * Если gid нет в таблице — ошибка, операции не выполняются.
+ */
+export async function resolveSheetTitle(env) {
+  const gid = requireGid(env);
+  const key = `${env.SPREADSHEET_ID}:${gid}`;
+  if (sheetCache && sheetCache.key === key) return sheetCache.title;
+
+  const data = await sheetsCall(env, 'GET', '?fields=sheets.properties(sheetId,title)');
+  const found = (data.sheets ?? []).map((s) => s.properties).find((p) => p.sheetId === gid);
+  if (!found) throw new Error(`Лист с gid=${gid} не найден в таблице. Запись заблокирована.`);
+
+  sheetCache = { key, title: found.title };
+  return found.title;
+}
+
+/** A1-диапазон с явным листом: 'Название листа'!A1:B2 (апострофы экранируются). */
+export function a1(title, range) {
+  return `'${title.replace(/'/g, "''")}'!${range}`;
+}
+
+const pathRange = (title, range) => encodeURIComponent(a1(title, range));
+
+/** Колонки B..E: сумма, валюта, курс, рубли. Не трогают A (дата), F:G (ручные категории), H:I. */
+export function amountCells(expense) {
+  const isRub = expense.currency === 'RUB';
+  return [expense.amount, expense.currency, isRub ? 1 : '', isRub ? expense.amount : ''];
+}
+
+/** Колонки H..I: исходный текст и источник. */
+export function textCells(expense) {
+  return [expense.raw_text, expense.source];
+}
+
+/** Колонки B..I для новой строки: F:G остаются пустыми для ручного заполнения. */
+export function expenseCells(expense) {
+  return [...amountCells(expense), '', '', ...textCells(expense)];
+}
+
+const COLS = 9; // A:I
 
 function toEntry(cells, rowNumber) {
   const c = [...cells];
@@ -115,64 +154,83 @@ function toEntry(cells, rowNumber) {
   };
 }
 
-/** 1 запрос Sheets: добавление строки. */
+/** Короткий отпечаток строки (FNV-1a, 8 hex). Защищает от действий над сдвинувшейся строкой. */
+export function fingerprint(entry) {
+  const s = [entry.date, entry.amount, entry.currency, entry.raw_text, entry.source].join('|');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** Запись в конец листа. RAW: текст никогда не интерпретируется как формула. 1 запрос. */
 export async function appendExpense(env, expense, messageDate) {
+  const title = await resolveSheetTitle(env);
   const dateText = formatSheetDate(messageDate, Number(env.TZ_OFFSET_HOURS ?? 0));
   await sheetsCall(
     env,
     'POST',
-    '/values/A:I:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
+    `/values/${pathRange(title, 'A:I')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
     { values: [[dateText, ...expenseCells(expense)]] },
   );
 }
 
-/** 1 запрос Sheets: число заполненных строк по колонке A (чтобы не тянуть всю таблицу). */
-async function countRows(env) {
-  const data = await sheetsCall(env, 'GET', '/values/A:A');
+async function countRows(env, title) {
+  const data = await sheetsCall(env, 'GET', `/values/${pathRange(title, 'A:A')}`);
   return data.values?.length ?? 0;
 }
 
-async function readRows(env, from, to) {
-  const data = await sheetsCall(env, 'GET', `/values/A${from}:I${to}`);
+async function readRows(env, title, from, to) {
+  const data = await sheetsCall(env, 'GET', `/values/${pathRange(title, `A${from}:I${to}`)}`);
   return data.values ?? [];
 }
 
-/** 2 запроса Sheets: количество строк + диапазон последних n. Новые сверху. */
+/** Последние n записей, новые сверху. 2 запроса на вызов (+1 для резолва листа на холодный isolate). */
 export async function getLastRows(env, n = 4) {
-  const total = await countRows(env);
+  const title = await resolveSheetTitle(env);
+  const total = await countRows(env, title);
   if (total <= 1) return []; // только заголовок или пусто
   const start = Math.max(2, total - n + 1);
-  const values = await readRows(env, start, total);
+  const values = await readRows(env, title, start, total);
   return values.map((cells, i) => toEntry(cells, start + i)).reverse();
 }
 
-/** 1 запрос Sheets. Возвращает null, если строки нет или это заголовок. */
+/** Одна строка или null (заголовок, пустая или отсутствующая строка). 1 запрос. */
 export async function getRow(env, rowNumber) {
-  if (rowNumber < 2) return null;
-  const [cells] = await readRows(env, rowNumber, rowNumber);
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) return null;
+  const title = await resolveSheetTitle(env);
+  const [cells] = await readRows(env, title, rowNumber, rowNumber);
   if (!cells || cells.length === 0) return null;
   return toEntry(cells, rowNumber);
 }
 
-/** 1 запрос Sheets: перезапись B..I выбранной строки. */
+/**
+ * Обновляет только B:E и H:I выбранной строки. F:G (ручные категории) не трогаются.
+ * Одним batchUpdate. 1 запрос.
+ */
 export async function updateRow(env, rowNumber, expense) {
-  if (rowNumber < 2) throw new Error('Нельзя редактировать строку заголовка');
-  await sheetsCall(
-    env,
-    'PUT',
-    `/values/B${rowNumber}:I${rowNumber}?valueInputOption=USER_ENTERED`,
-    { values: [expenseCells(expense)] },
-  );
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) throw new Error('Нельзя редактировать строку заголовка');
+  const title = await resolveSheetTitle(env);
+  await sheetsCall(env, 'POST', '/values:batchUpdate', {
+    valueInputOption: 'RAW',
+    data: [
+      { range: a1(title, `B${rowNumber}:E${rowNumber}`), values: [amountCells(expense)] },
+      { range: a1(title, `H${rowNumber}:I${rowNumber}`), values: [textCells(expense)] },
+    ],
+  });
 }
 
-/** 1 запрос Sheets: удаление строки со сдвигом (как delete_rows в gspread). */
+/** Удаление строки со сдвигом. sheetId берётся из проверенного SHEET_GID. 1 запрос (+резолв). */
 export async function deleteRow(env, rowNumber) {
-  if (rowNumber < 2) throw new Error('Нельзя удалить строку заголовка');
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) throw new Error('Нельзя удалить строку заголовка');
+  await resolveSheetTitle(env); // проверяет, что gid существует в таблице
   await sheetsCall(env, 'POST', ':batchUpdate', {
     requests: [{
       deleteDimension: {
         range: {
-          sheetId: Number(env.SHEET_GID ?? 0),
+          sheetId: requireGid(env),
           dimension: 'ROWS',
           startIndex: rowNumber - 1,
           endIndex: rowNumber,
