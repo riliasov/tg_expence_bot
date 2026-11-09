@@ -1,133 +1,17 @@
 # Telegram Expense Bot
 
-Бот для учета расходов в Google Sheets с поддержкой распознавания естественного языка.
+Личный Telegram-бот для ежедневного ввода расходов в Google Sheets.
+Работает на Cloudflare Workers Free. Без БД, KV, Docker и платных сервисов.
 
-## 🚀 Возможности
+Код: [workers/tg-expense-bot/](workers/tg-expense-bot/). Инструкция по запуску и секреты: [workers/tg-expense-bot/README.md](workers/tg-expense-bot/README.md).
 
-- **Умный парсинг**: Понимает текст в свободном формате (`кофе 250 нал`, `20 usd такси`)
-- **Мультивалютность**: Поддержка RUB, USD, EUR, KZT, CLP, USDT, THB
-- **Источники**: Cash, TBank, Sber, Alfa, Ozon, Yandex и другие
-- **Управление**: Просмотр последних записей, редактирование и удаление через кнопки
-- **Интеграция**: Мгновенная запись в Google Sheets с указанием даты и времени
-- **Безопасность**: Использование Google Secret Manager для хранения ключей
-
-## 🛠 Установка и запуск
-
-### Предварительные требования
-
-- Python 3.12+
-- Аккаунт Google Cloud Platform
-- Telegram Bot Token (@BotFather)
-
-### Локальная разработка
-
-1. **Клонируйте репозиторий:**
-   ```bash
-   git clone <repo_url>
-   cd tg_expence_bot
-   ```
-
-2. **Создайте виртуальное окружение:**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # macOS/Linux
-   ```
-
-3. **Установите зависимости:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Настройте переменные окружения:**
-   Создайте файл `secrets/.env` на основе примера:
-   ```bash
-   mkdir -p secrets
-   cp .env.example secrets/.env
-   ```
-   Заполните `secrets/.env` вашими данными.
-
-5. **Запустите бота:**
-   ```bash
-   python main.py
-   ```
-
-### Тестирование
-
-Запуск unit-тестов для проверки парсера:
-```bash
-pytest tests/ -v
-```
-
-## ☁️ Деплой в Google Cloud Run
-
-Проект настроен для деплоя в Google Cloud Run с использованием Secret Manager.
-
-### 1. Подготовка секретов
-
-Создайте секреты в Google Secret Manager:
-- `TELEGRAM_TOKEN`
-- `SPREADSHEET_ID`
-- `WEBHOOK_URL`
-- `google-credentials-secret` (содержимое JSON файла сервисного аккаунта)
-
-### 2. Деплой скриптом
-
-Используйте скрипт `deploy.sh` для автоматического деплоя:
+## Быстрый старт
 
 ```bash
-# Убедитесь, что скрипт исполняемый
-chmod +x deploy.sh
-
-# Запустите деплой
-./deploy.sh
+cd workers/tg-expense-bot
+npm ci
+npm test
+npm run deploy   # после подготовки секретов; webhook при этом не переключается
 ```
 
-Скрипт автоматически:
-- Соберет Docker образ
-- Загрузит его в Google Container Registry
-- Развернет сервис в Cloud Run (регион `europe-west1`)
-- Подключит секреты из Secret Manager
-
-## 📝 Формат сообщений
-
-Бот понимает различные варианты ввода. Порядок слов не важен.
-
-**Примеры:**
-- `продукты 500` -> 500 RUB, Cash, "продукты"
-- `такси 300 сбер` -> 300 RUB, Sber, "такси"
-- `20 usd подписка` -> 20 USD, Cash, "подписка"
-- `1000 тбанк обед` -> 1000 RUB, TBank, "обед"
-
-**Поддерживаемые валюты:**
-RUB, USD, EUR, KZT, CLP, USDT, THB
-
-**Поддерживаемые источники:**
-Cash (нал), TBank (Тинькофф), Sber (Сбер), Alfa (Альфа), Ozon, Yandex, BCC, Travel
-
-## 📂 Структура проекта
-
-```
-tg_expence_bot/
-├── .github/workflows/    # CI конфигурация
-├── secrets/              # Локальные секреты (игнорируется git)
-├── src/
-│   ├── bot_handlers.py   # Логика бота
-│   ├── bot_keyboards.py  # Клавиатуры
-│   ├── config.py         # Конфигурация
-│   ├── logger.py         # Система логирования
-│   ├── parser_core.py    # Парсер текста
-│   └── sheets_client.py  # Работа с Google Sheets
-├── tests/                # Тесты
-├── deploy.sh             # Скрипт деплоя
-├── fast_push.sh          # Скрипт для git push
-├── main.py               # Точка входа
-└── requirements.txt      # Зависимости
-```
-
-## 🔍 Мониторинг и Логирование
-
-Логи пишутся в стандартный вывод (stdout) в JSON формате (для Cloud Run) или в читаемом формате (локально).
-Просмотреть логи в Cloud Run:
-```bash
-gcloud run services logs read tg-expence-bot --region europe-west1 --limit 50
-```
+Тесты и проверка сборки также выполняются в GitHub Actions: `.github/workflows/worker-ci.yml`.

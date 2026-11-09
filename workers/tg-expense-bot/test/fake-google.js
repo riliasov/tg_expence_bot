@@ -47,7 +47,14 @@ export function createFakeGoogle({ tabs } = {}) {
     const body = parseBody(init.body);
     calls.push({ url: u.toString(), method, body, raw: init.body, path: decodeURIComponent(u.pathname), search: u.search });
 
-    if (u.hostname === 'oauth2.googleapis.com') return json({ access_token: 'tok', expires_in: 3600 });
+    if (u.hostname === 'oauth2.googleapis.com') {
+      // Как у Google: неверный grant_type отклоняется
+      const grant = new URLSearchParams(String(init.body ?? '')).get('grant_type');
+      if (grant !== 'urn:ietf:params:oauth:grant-type:jwt-bearer') {
+        return json({ error: 'unsupported_grant_type', error_description: `Invalid grant_type: ${grant}` }, 400);
+      }
+      return json({ access_token: 'tok', expires_in: 3600 });
+    }
     if (u.hostname === 'api.telegram.org') return json({ ok: true, result: { message_id: 1 } });
     if (u.hostname !== 'sheets.googleapis.com') return new Response('unexpected', { status: 500 });
 

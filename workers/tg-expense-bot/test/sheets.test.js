@@ -89,3 +89,8 @@ test('fingerprint меняется при изменении содержимо�
   assert.notEqual(fingerprint(base), fingerprint({ ...base, raw_text: 'обед 2' }));
   assert.match(fingerprint(base), /^[0-9a-f]{8}$/);
 });
+
+test('grant_type совпадает с RFC 7523 / google-auth (urn:ietf:params:oauth:...)', async () => {
+  const { JWT_GRANT_TYPE } = await import('../src/sheets.js');
+  assert.equal(JWT_GRANT_TYPE, 'urn:ietf:params:oauth:grant-type:jwt-bearer');
+});
