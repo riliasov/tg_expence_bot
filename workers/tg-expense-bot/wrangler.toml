@@ -3,8 +3,12 @@ main = "src/index.js"
 compatibility_date = "2025-09-01"
 workers_dev = true
 
-# Несекретные значения. Обязательные секреты задаются через `wrangler secret put` (см. README.md).
-# SHEET_GID намеренно НЕ задан здесь: без явного gid листа все операции с таблицей блокируются.
+# Несекретные значения лежат здесь. Секреты (TELEGRAM_TOKEN, WEBHOOK_SECRET, ALLOWED_USER_ID,
+# GOOGLE_SERVICE_ACCOUNT_JSON) задаются через `wrangler secret put`, см. README.md.
 [vars]
+# ID таблицы из URL: docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit
+SPREADSHEET_ID = "1B_qxpY5lU8jE3NSJmeMkNmsACCh_8A41jpK63WsauAE"
+# gid вкладки tg_bot (из URL: #gid=...). Все операции адресуются только к этой вкладке.
+SHEET_GID = "717952579"
 # Часовой пояс для даты записи (UTC+5, как в Python-версии).
 TZ_OFFSET_HOURS = "5"

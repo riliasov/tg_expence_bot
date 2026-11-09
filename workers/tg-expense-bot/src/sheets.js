@@ -8,6 +8,8 @@ import { formatSheetDate } from './format.js';
 
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+// RFC 7523 JWT bearer grant. Значение совпадает с google-auth (urn:ietf:params:oauth:..., без "2").
+export const JWT_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const TOKEN_TTL_SEC = 3600;
 
@@ -63,7 +65,7 @@ export async function getAccessToken(env, now = Date.now()) {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer',
+      grant_type: JWT_GRANT_TYPE,
       assertion,
     }),
   });

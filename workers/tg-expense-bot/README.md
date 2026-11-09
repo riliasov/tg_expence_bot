@@ -54,11 +54,9 @@ workers/tg-expense-bot/
 | `TELEGRAM_TOKEN` | токен бота от @BotFather |
 | `WEBHOOK_SECRET` | случайная строка для заголовка secret token. Сгенерировать: `openssl rand -hex 32` |
 | `ALLOWED_USER_ID` | ваш числовой Telegram user ID (единственный, кому отвечает бот) |
-| `SPREADSHEET_ID` | ID таблицы из URL: `docs.google.com/spreadsheets/d/{ID}/edit` |
-| `SHEET_GID` | **обязательный** gid листа из URL таблицы (`#gid=...`). Значения по умолчанию нет |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | весь JSON ключа сервисного аккаунта |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | весь JSON ключа сервисного аккаунта (передаётся из файла через stdin, см. ниже) |
 
-Несекретное значение в `wrangler.toml` (`[vars]`): `TZ_OFFSET_HOURS` = `5`.
+Несекретные значения лежат в `wrangler.toml` (`[vars]`): `SPREADSHEET_ID`, `SHEET_GID` (gid вкладки `tg_bot`, обязателен, значения по умолчанию нет) и `TZ_OFFSET_HOURS` = `5`.
 
 ## Деплой (выполняйте вручную, по шагам)
 
@@ -76,10 +74,9 @@ workers/tg-expense-bot/
    npx wrangler secret put TELEGRAM_TOKEN
    npx wrangler secret put WEBHOOK_SECRET
    npx wrangler secret put ALLOWED_USER_ID
-   npx wrangler secret put SPREADSHEET_ID
-   npx wrangler secret put SHEET_GID
-   npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
+   npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON < ../../secrets/service-account.json
    ```
+   Ключ передаётся через stdin из файла: в терминал и в промежуточные файлы он не выводится.
 5. Деплой Worker'а (это **не** переключает webhook):
    ```bash
    npm run deploy
