@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildJwt, importPrivateKey, b64url, expenseCells, amountCells, textCells,
-  a1, requireGid, fingerprint,
+  a1, requireGid, fingerprint, sheetDateSerial, sheetDateTimeSerial,
 } from '../src/sheets.js';
 import { formatAmount, formatSheetDate, formatShortDate, esc } from '../src/format.js';
 import { parseExpense } from '../src/parser.js';
@@ -44,49 +44,66 @@ test('b64url без паддинга и без + и /', () => {
   assert.equal(b64url(new Uint8Array([251, 255])), '-_8');
 });
 
-test('строка для Sheets: поля B..I, курс и рубли только для RUB', () => {
+test('13 значений A:M соответствуют целевой схеме, расход отрицательный', () => {
   const rub = expenseCells(parseExpense('кофе 250.5 нал'));
-  assert.deepEqual(rub, [250.5, 'RUB', 1, 250.5, '', '', 'кофе 250.5 нал', 'Cash']);
+  assert.deepEqual(rub, [-250.5, 'RUB', 1, -250.5, 'Покупка', '', 'кофе', 'Cash', '', '', 'RUB']);
 
   const vnd = expenseCells(parseExpense('кофе 50000 vnd сбер'));
-  assert.deepEqual(vnd, [50000, 'VND', '', '', '', '', 'кофе 50000 vnd сбер', 'Sber']);
+  assert.deepEqual(vnd, [-50000, 'VND', '', '', 'Покупка', '', 'кофе', 'Sber', '', '', 'VND']);
+  assert.equal(rub.length + 2, 13, 'Timestamp и Operation Date добавляются при записи');
 });
 
-test('форматирование сумм и дат', () => {
-  assert.equal(formatAmount(250), '250');
-  assert.equal(formatAmount(250.5), '250.5');
-  assert.equal(formatAmount(250.25), '250.25');
+test('timestamp и Operation Date — числовые даты Sheets в UTC+5', () => {
+  const instant = new Date('2024-12-04T20:10:23Z');
+  const expectedTimestamp = 45631 + (1 * 3600 + 10 * 60 + 23) / 86_400; // 2024-12-05 01:10:23 в UTC+5
+  assert.equal(sheetDateTimeSerial(instant, 5), expectedTimestamp);
+  assert.equal(sheetDateSerial(instant, 5), 45631);
+
+  const dayBoundary = new Date('2024-12-04T19:30:00Z');
+  assert.equal(sheetDateSerial(dayBoundary, 5), 45631);
+});
+
+test('форматирование сумм, дат и текста Telegram', () => {
+  assert.equal(formatAmount(-250), '-250');
+  assert.equal(formatAmount(-250.5), '-250.5');
+  assert.equal(formatAmount(-250.25), '-250.25');
   // 2024-12-04 10:30 UTC -> 15:30 при UTC+5
   assert.equal(formatSheetDate(new Date('2024-12-04T10:30:00Z'), 5), '04.12.2024 15:30');
-  assert.equal(formatShortDate('04.12.2024 15:30'), '15:30 04/12');
+  assert.equal(formatShortDate('04.12.2024 15:10:23'), '15:10 04/12');
   assert.equal(formatShortDate('как есть'), 'как есть');
   assert.equal(esc('<b>&</b>'), '&lt;b&gt;&amp;&lt;/b&gt;');
 });
 
-test('редактирование: B:E и H:I отдельно, F:G не входят', () => {
+test('редактирование меняет расчётные поля, не включает ручные поля', () => {
   const e = parseExpense('такси 300 сбер');
-  assert.deepEqual(amountCells(e), [300, 'RUB', 1, 300]);
-  assert.deepEqual(textCells(e), ['такси 300 сбер', 'Sber']);
+  assert.deepEqual(amountCells(e), [-300, 'RUB', 1, -300]);
+  assert.deepEqual(textCells(e), ['такси', 'Sber']);
 });
 
 test('a1: имя листа берётся в апострофы, апостроф экранируется', () => {
-  assert.equal(a1('Расходы', 'A:I'), "'Расходы'!A:I");
+  assert.equal(a1('tg_bot', 'A:M'), "'tg_bot'!A:M");
   assert.equal(a1("Bob's", 'B2:E2'), "'Bob''s'!B2:E2");
 });
 
 test('requireGid: пустой, нечисловой и отрицательный SHEET_GID отклоняются', () => {
-  assert.equal(requireGid({ SHEET_GID: '555' }), 555);
+  assert.equal(requireGid({ SHEET_GID: '717952579' }), 717952579);
   assert.equal(requireGid({ SHEET_GID: '0' }), 0);
   for (const bad of [undefined, '', 'abc', '-1', '1.5']) {
     assert.throws(() => requireGid({ SHEET_GID: bad }), /SHEET_GID не задан/, String(bad));
   }
 });
 
-test('fingerprint меняется при изменении содержимого строки и стабилен', () => {
-  const base = { date: '04.12.2024 15:10', amount: '500', currency: 'RUB', raw_text: 'обед', source: 'Cash' };
+test('fingerprint учитывает все 13 колонок, но не номер строки', () => {
+  const base = {
+    timestamp: '04.12.2024 15:10:23', amount: '-500', currency: 'RUB', fx_rub: '1', rub: '-500',
+    category: 'Покупка', subcategory: '', description: 'обед', source: 'Cash', fx: '',
+    commission: '', purchase_currency: 'RUB', operation_date: '04.12.2024',
+  };
   assert.equal(fingerprint(base), fingerprint({ ...base, row_number: 9 }));
-  assert.notEqual(fingerprint(base), fingerprint({ ...base, amount: '501' }));
-  assert.notEqual(fingerprint(base), fingerprint({ ...base, raw_text: 'обед 2' }));
+  assert.notEqual(fingerprint(base), fingerprint({ ...base, amount: '-501' }));
+  assert.notEqual(fingerprint(base), fingerprint({ ...base, category: 'Еда' }));
+  assert.notEqual(fingerprint(base), fingerprint({ ...base, fx: '0.5' }));
+  assert.notEqual(fingerprint(base), fingerprint({ ...base, operation_date: '05.12.2024' }));
   assert.match(fingerprint(base), /^[0-9a-f]{8}$/);
 });
 

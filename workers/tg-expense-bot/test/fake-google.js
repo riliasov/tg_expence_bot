@@ -3,9 +3,13 @@
 
 export const SPREADSHEET_ID = 'sheet-id';
 export const GID_MAIN = 0;
-export const GID_EXPENSES = 555;
+export const GID_EXPENSES = 717952579;
 
-const COL_LETTERS = 'ABCDEFGHI';
+const COL_LETTERS = 'ABCDEFGHIJKLM';
+export const TARGET_HEADER = [
+  'Timestamp', 'Amount', 'Currency', 'FX RUB', 'RUB', 'Category', 'SubCategory',
+  'Description', 'Account', 'FX', 'Commission', 'Purchase Currency', 'Operation Date',
+];
 
 function parseBody(raw) {
   if (!raw || typeof raw !== 'string') return undefined;
@@ -14,8 +18,8 @@ function parseBody(raw) {
 
 export function createFakeGoogle({ tabs } = {}) {
   const store = tabs ?? [
-    { sheetId: GID_MAIN, title: 'Общая', rows: [['Дата', 'Сумма', 'Валюта', 'Курс', 'RUB', 'Категория', 'Подкатегория', 'Текст', 'Источник']] },
-    { sheetId: GID_EXPENSES, title: 'Расходы', rows: [['Дата', 'Сумма', 'Валюта', 'Курс', 'RUB', 'Категория', 'Подкатегория', 'Текст', 'Источник']] },
+    { sheetId: GID_MAIN, title: 'Банк', rows: [TARGET_HEADER.slice()] },
+    { sheetId: GID_EXPENSES, title: 'tg_bot', rows: [TARGET_HEADER.slice()] },
   ];
   const byTitle = (title) => {
     const tab = store.find((t) => t.title === title);

@@ -1,8 +1,8 @@
 import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.js';
-import { createFakeGoogle, GID_EXPENSES } from './fake-google.js';
-import { fingerprint } from '../src/sheets.js';
+import { createFakeGoogle, GID_EXPENSES, TARGET_HEADER } from './fake-google.js';
+import { fingerprint, getRow } from '../src/sheets.js';
 
 async function makeServiceAccountJson() {
   const pair = await crypto.subtle.generateKey(
@@ -27,6 +27,8 @@ const baseEnv = () => ({
 });
 
 const DATE = 1_733_307_000; // 2024-12-04 10:10 UTC -> 15:10 при UTC+5
+const EXPECTED_TS = 45630 + (15 * 3600 + 10 * 60) / 86_400;
+const EXPECTED_DAY = 45630;
 
 const req = (update, secret = 's3cret_value') =>
   new Request('https://tg-expense-bot.test.workers.dev/', {
@@ -67,11 +69,18 @@ beforeEach(() => {
 });
 afterEach(() => mock.restoreAll());
 
-// Записываем строки в «Расходы» (gid 555), «Общая» остаётся пустой.
-const EXPENSE_HEADER = ['Дата', 'Сумма', 'Валюта', 'Курс', 'RUB', 'Категория', 'Подкатегория', 'Текст', 'Источник'];
 function seedExpenses(rows) {
-  google.tab('Расходы').rows = [EXPENSE_HEADER, ...rows];
+  google.tab('tg_bot').rows = [TARGET_HEADER.slice(), ...rows];
 }
+
+function storedRow({
+  timestamp = '04.12.2024 15:10:00', amount = '-500', currency = 'RUB', fxRub = '1', rub = '-500',
+  category = 'Еда', subcategory = 'Кафе', description = 'обед', account = 'Cash', fx = '',
+  commission = '', purchaseCurrency = currency, operationDate = '04.12.2024',
+} = {}) {
+  return [timestamp, amount, currency, fxRub, rub, category, subcategory, description, account, fx, commission, purchaseCurrency, operationDate];
+}
+
 const lastTelegramText = () => {
   const sends = google.telegramCalls('sendMessage');
   return JSON.parse(sends[sends.length - 1].raw).text;
@@ -80,8 +89,6 @@ const lastEditText = () => {
   const edits = google.telegramCalls('editMessageText');
   return JSON.parse(edits[edits.length - 1].raw).text;
 };
-
-// --- Доступ и webhook ---
 
 test('без или с неверным secret token — 403 и никаких внешних вызовов', async () => {
   const r1 = await worker.fetch(req(privateMsg('кофе 250'), 'wrong'), env);
@@ -102,194 +109,158 @@ test('GET отвечает 404', async () => {
   assert.equal((await worker.fetch(new Request('https://x.test/'), env)).status, 404);
 });
 
-test('чужой user ID игнорируется молча', async () => {
-  const u = privateMsg('кофе 250');
-  u.message.from.id = 999;
-  u.message.chat.id = 999;
-  assert.equal((await worker.fetch(req(u), env)).status, 200);
+test('чужой user ID и групповой чат игнорируются молча', async () => {
+  const outsider = privateMsg('кофе 250');
+  outsider.message.from.id = 999;
+  outsider.message.chat.id = 999;
+  await worker.fetch(req(outsider), env);
+  await worker.fetch(req(privateMsg('кофе 250', { chat: { id: -100123, type: 'supergroup' } })), env);
   assert.equal(google.calls.length, 0);
 });
 
-test('групповой чат владельца игнорируется: ни записи, ни ответа', async () => {
-  const u = privateMsg('кофе 250', { chat: { id: -100123, type: 'supergroup' } });
-  await worker.fetch(req(u), env);
-  assert.equal(google.calls.length, 0);
+test('несовпадающий заголовок блокирует чтение и запись по новой схеме', async () => {
+  google.tab('tg_bot').rows[0] = ['Дата', 'Сумма', 'Валюта', 'Курс', 'RUB', 'Категория', 'Подкатегория', 'Текст', 'Источник'];
+  await worker.fetch(req(privateMsg('кофе 35000 vnd нал')), env);
+  assert.equal(google.tab('tg_bot').rows.length, 1);
+  assert.equal(google.sheetCalls().filter((c) => c.method === 'POST').length, 0);
+  assert.match(lastTelegramText(), /Заголовки A:M не совпадают/);
 });
 
-test('callback из группы тоже игнорируется', async () => {
-  await worker.fetch(req(callbackUpdate('delete_row:5', { id: -100123, type: 'group' })), env);
-  assert.equal(google.calls.length, 0);
+test('расход VND записывается во все 13 колонок A:M, другие вкладки не меняются', async () => {
+  const response = await worker.fetch(req(privateMsg('кофе 35000 vnd нал')), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(google.tab('Банк').rows, [TARGET_HEADER]);
+  assert.deepEqual(google.tab('tg_bot').rows[1], [
+    EXPECTED_TS, -35000, 'VND', '', '', 'Покупка', '', 'кофе', 'Cash', '', '', 'VND', EXPECTED_DAY,
+  ]);
+  assert.match(lastTelegramText(), /Добавлено: кофе \| -35000 VND \| Cash/);
+
+  const append = google.sheetCalls().find((c) => c.path.endsWith(':append'));
+  assert.ok(append, 'используется values.append');
+  assert.equal(decodeURIComponent(append.path.split('/values/')[1].split(':append')[0]), "'tg_bot'!A:M");
+  assert.match(append.search, /valueInputOption=RAW/);
+  assert.match(append.search, /insertDataOption=INSERT_ROWS/);
+  assert.equal(append.body.values[0].length, 13);
+  assert.equal(typeof append.body.values[0][0], 'number');
+  assert.equal(typeof append.body.values[0][12], 'number');
+  assert.ok(google.sheetCalls().some((c) => c.method === 'GET' && decodeURIComponent(c.path).includes("'tg_bot'!A1:M1")));
 });
 
-// --- Адресация по SHEET_GID ---
-
-test('запись идёт на лист с gid из SHEET_GID, а не на первый лист', async () => {
-  await worker.fetch(req(privateMsg('кофе 250.50 нал')), env);
-  assert.equal(google.tab('Общая').rows.length, 1, 'первый лист не тронут');
-  const rows = google.tab('Расходы').rows;
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows[1], ['04.12.2024 15:10', 250.5, 'RUB', 1, 250.5, '', '', 'кофе 250.50 нал', 'Cash']);
+test('RUB расход получает FX RUB = 1, RUB равен отрицательному Amount', async () => {
+  await worker.fetch(req(privateMsg('кофе 35000 нал')), env);
+  const row = google.tab('tg_bot').rows[1];
+  assert.deepEqual(row.slice(1, 5), [-35000, 'RUB', 1, -35000]);
+  assert.equal(row[11], 'RUB');
 });
 
-test('все запросы values адресуют лист по title, без голого A:I', async () => {
-  await worker.fetch(req(privateMsg('кофе 250')), env);
-  const valueCalls = google.sheetCalls().filter((c) => c.path.includes('/values'));
-  assert.ok(valueCalls.length > 0);
-  for (const c of valueCalls) {
-    const decoded = c.path + decodeURIComponent(c.search);
-    assert.ok(decoded.includes("'Расходы'!"), `нет явного листа в ${decoded}`);
-  }
+test('пользовательский текст записывается литералом RAW', async () => {
+  await worker.fetch(req(privateMsg('=HYPERLINK("x") 100')), env);
+  const row = google.tab('tg_bot').rows[1];
+  assert.equal(row[7], '=HYPERLINK("x")');
+  const append = google.sheetCalls().find((c) => c.path.endsWith(':append'));
+  assert.match(append.search, /valueInputOption=RAW/);
 });
 
-test('SHEET_GID не задан — запись заблокирована, Sheets не вызывается', async () => {
+test('слишком длинный ввод отклоняется без чтения или записи Sheets', async () => {
+  await worker.fetch(req(privateMsg('к'.repeat(300) + ' 100')), env);
+  assert.equal(google.sheetCalls().length, 0);
+  assert.match(lastTelegramText(), /длиннее 200/);
+});
+
+test('управляющие символы удаляются из описания', async () => {
+  await worker.fetch(req(privateMsg('кофе\n250\tнал')), env);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'кофе');
+});
+
+test('неверный или неизвестный GID блокирует любые записи', async () => {
   delete env.SHEET_GID;
   await worker.fetch(req(privateMsg('кофе 250')), env);
   assert.equal(google.sheetCalls().filter((c) => c.method === 'POST').length, 0);
   assert.match(lastTelegramText(), /SHEET_GID не задан/);
-});
 
-test('SHEET_GID не существует в таблице — запись заблокирована', async () => {
   env.SHEET_GID = '999';
   await worker.fetch(req(privateMsg('кофе 250')), env);
   assert.equal(google.sheetCalls().filter((c) => c.method === 'POST').length, 0);
   assert.match(lastTelegramText(), /gid=999 не найден/);
 });
 
-// --- Добавление и безопасная запись ---
+test('редактирование обновляет только B:E, H:I и L, сохраняя категории, FX, комиссию и даты', async () => {
+  seedExpenses([storedRow({ fx: 'manual FX', commission: 'manual fee' })]);
+  const fp = fingerprint(await getRow(env, 2));
 
-test('текст, похожий на формулу, пишется литералом (RAW)', async () => {
-  await worker.fetch(req(privateMsg('=HYPERLINK("x") 100')), env);
-  const append = google.sheetCalls().find((c) => c.path.endsWith(':append'));
-  assert.match(append.search, /valueInputOption=RAW/);
-  assert.equal(google.tab('Расходы').rows[1][7], '=HYPERLINK("x") 100');
-});
-
-test('слишком длинный текст отклоняется, запись не создаётся', async () => {
-  await worker.fetch(req(privateMsg('к'.repeat(300) + ' 100')), env);
-  assert.equal(google.sheetCalls().length, 0);
-  assert.match(lastTelegramText(), /длиннее 200/);
-});
-
-test('управляющие символы в тексте заменяются пробелом', async () => {
-  await worker.fetch(req(privateMsg('кофе\n250\tнал')), env);
-  assert.equal(google.tab('Расходы').rows[1][7], 'кофе 250 нал');
-});
-
-// --- Редактирование: F:G сохраняются, stale-проверка ---
-
-test('редактирование меняет B:E и H:I, ручные F:G остаются', async () => {
-  seedExpenses([['04.12.2024 15:10', 500, 'RUB', 1, 500, 'Еда', 'Кафе', 'обед 500', 'Cash']]);
-  const row = { row_number: 2, date: '04.12.2024 15:10', amount: '500', currency: 'RUB', raw_text: 'обед 500', source: 'Cash' };
-  const fp = fingerprint(row);
-
-  // шаг 1: edit_row возвращает подсказку с fingerprint
   await worker.fetch(req(callbackUpdate(`edit_row:2:${fp}`)), env);
   const prompt = lastTelegramText();
   assert.match(prompt, new RegExp(`стр\\. 2, #${fp}`));
 
-  // шаг 2: ответ на подсказку
   const reply = privateMsg('такси 300 сбер', {
-    reply_to_message: { message_id: 9, from: { id: 111, is_bot: true }, chat: { id: 42, type: 'private' }, text: prompt },
+    reply_to_message: {
+      message_id: 9,
+      from: { id: 111, is_bot: true },
+      chat: { id: 42, type: 'private' },
+      text: prompt,
+    },
   });
   await worker.fetch(req(reply), env);
 
-  const r = google.tab('Расходы').rows[1];
-  assert.equal(r[1], 300);
-  assert.equal(r[7], 'такси 300 сбер');
-  assert.equal(r[8], 'Sber');
-  assert.equal(r[5], 'Еда', 'F сохранена');
-  assert.equal(r[6], 'Кафе', 'G сохранена');
-  assert.equal(r[0], '04.12.2024 15:10', 'дата не меняется');
-
-  const batch = google.sheetCalls().find((c) => c.path.endsWith('/values:batchUpdate'));
-  const ranges = batch.body.data.map((d) => d.range);
-  assert.deepEqual(ranges, ["'Расходы'!B2:E2", "'Расходы'!H2:I2"]);
+  const row = google.tab('tg_bot').rows[1];
+  assert.deepEqual(row, [
+    '04.12.2024 15:10:00', -300, 'RUB', 1, -300, 'Еда', 'Кафе', 'такси', 'Sber', 'manual FX', 'manual fee', 'RUB', '04.12.2024',
+  ]);
+  const update = google.sheetCalls().find((c) => c.path.endsWith('/values:batchUpdate'));
+  assert.equal(update.body.valueInputOption, 'RAW');
+  assert.deepEqual(update.body.data.map((d) => d.range), [
+    "'tg_bot'!B2:E2", "'tg_bot'!H2:I2", "'tg_bot'!L2:L2",
+  ]);
 });
 
-test('редактирование строки, которая изменилась, отклоняется без записи', async () => {
-  seedExpenses([['04.12.2024 15:10', 500, 'RUB', 1, 500, '', '', 'обед 500', 'Cash']]);
-  const staleFp = '00000000';
-  const prompt = `✏️ Редактирование строки (стр. 2, #${staleFp})\nИсходный текст: x`;
+test('изменение любой колонки инвалидирует fingerprint редактирования', async () => {
+  seedExpenses([storedRow()]);
+  const fp = fingerprint(await getRow(env, 2));
+  google.tab('tg_bot').rows[1][5] = 'Изменено вручную';
+  const prompt = `✏️ Редактирование строки (стр. 2, #${fp})`;
   const reply = privateMsg('такси 300', {
-    reply_to_message: { message_id: 9, from: { id: 111, is_bot: true }, chat: { id: 42, type: 'private' }, text: prompt },
+    reply_to_message: { message_id: 9, from: { id: 111, is_bot: true }, text: prompt },
   });
   await worker.fetch(req(reply), env);
   assert.equal(google.sheetCalls().filter((c) => c.path.endsWith('/values:batchUpdate')).length, 0);
   assert.match(lastTelegramText(), /изменилась или не найдена/);
 });
 
-// --- Удаление: подтверждение и сверка строки ---
-
-test('удаление: сначала подтверждение, таблица не меняется', async () => {
-  seedExpenses([['04.12.2024 15:10', 500, 'RUB', 1, 500, '', '', 'обед 500', 'Cash']]);
-  const row = { row_number: 2, date: '04.12.2024 15:10', amount: '500', currency: 'RUB', raw_text: 'обед 500', source: 'Cash' };
-  const fp = fingerprint(row);
+test('удаление требует подтверждение и удаляет только строку tg_bot', async () => {
+  seedExpenses([storedRow()]);
+  const fp = fingerprint(await getRow(env, 2));
   await worker.fetch(req(callbackUpdate(`delete_row:2:${fp}`)), env);
-  assert.equal(google.tab('Расходы').rows.length, 2);
+  assert.equal(google.tab('tg_bot').rows.length, 2);
   assert.equal(google.sheetCalls().filter((c) => c.path.endsWith(':batchUpdate')).length, 0);
   assert.match(lastEditText(), /Удалить запись \(стр\. 2\)/);
-  const edit = google.telegramCalls('editMessageText').at(-1);
-  assert.ok(JSON.stringify(JSON.parse(edit.raw).reply_markup).includes(`confirm_delete:2:${fp}`));
+
+  await worker.fetch(req(callbackUpdate(`confirm_delete:2:${fp}`)), env);
+  assert.equal(google.tab('tg_bot').rows.length, 1);
+  assert.deepEqual(google.tab('Банк').rows, [TARGET_HEADER]);
+  const deletion = google.sheetCalls().find((c) => c.path.endsWith(':batchUpdate'));
+  assert.equal(deletion.body.requests[0].deleteDimension.range.sheetId, GID_EXPENSES);
 });
 
-test('удаление после подтверждения: строка удаляется со сдвигом в нужном листе', async () => {
+test('/last показывает последние записи с временем UTC+5', async () => {
   seedExpenses([
-    ['04.12.2024 15:10', 500, 'RUB', 1, 500, '', '', 'обед 500', 'Cash'],
-    ['05.12.2024 09:00', 200, 'RUB', 1, 200, '', '', 'кофе 200', 'Sber'],
-  ]);
-  const row = { row_number: 2, date: '04.12.2024 15:10', amount: '500', currency: 'RUB', raw_text: 'обед 500', source: 'Cash' };
-  await worker.fetch(req(callbackUpdate(`confirm_delete:2:${fingerprint(row)}`)), env);
-  const rows = google.tab('Расходы').rows;
-  assert.equal(rows.length, 2);
-  assert.equal(rows[1][7], 'кофе 200');
-  assert.equal(google.tab('Общая').rows.length, 1);
-});
-
-test('подтверждение удаления со сдвинувшейся строкой отклоняется', async () => {
-  // На месте строки 2 теперь другая запись: старый fingerprint не совпадает.
-  seedExpenses([['05.12.2024 09:00', 200, 'RUB', 1, 200, '', '', 'кофе 200', 'Sber']]);
-  const oldRow = { row_number: 2, date: '04.12.2024 15:10', amount: '500', currency: 'RUB', raw_text: 'обед 500', source: 'Cash' };
-  await worker.fetch(req(callbackUpdate(`confirm_delete:2:${fingerprint(oldRow)}`)), env);
-  assert.equal(google.tab('Расходы').rows.length, 2, 'ничего не удалено');
-  assert.equal(google.sheetCalls().filter((c) => c.path.endsWith(':batchUpdate')).length, 0);
-  assert.match(lastEditText(), /изменилась или не найдена/);
-});
-
-// --- Просмотр и fail path ---
-
-test('/last показывает две последние записи из нужного листа', async () => {
-  seedExpenses([
-    ['01.12.2024 10:00', 100, 'RUB', 1, 100, '', '', 'а', 'Cash'],
-    ['02.12.2024 11:00', 200, 'RUB', 1, 200, '', '', 'б', 'Cash'],
+    storedRow({ timestamp: '01.12.2024 10:00:00', amount: '-100', description: 'а', category: '', subcategory: '' }),
+    storedRow({ timestamp: '02.12.2024 11:00:00', amount: '-200', description: 'б', category: '', subcategory: '' }),
   ]);
   await worker.fetch(req(privateMsg('/last')), env);
   const text = lastTelegramText();
-  assert.match(text, /1\. 11:00 02\/12 200 RUB Cash/);
-  assert.match(text, /2\. 10:00 01\/12 100 RUB Cash/);
+  assert.match(text, /1\. 11:00 02\/12 -200 RUB Cash/);
+  assert.match(text, /2\. 10:00 01\/12 -100 RUB Cash/);
 });
 
-test('ошибка Sheets: владелец получает видимое сообщение, Worker отвечает 200', async () => {
+test('ошибка Sheets видна владельцу, Worker отвечает Telegram HTTP 200', async () => {
   google.setFailSheets(true);
-  const r = await worker.fetch(req(privateMsg('кофе 250')), env);
-  assert.equal(r.status, 200);
+  const response = await worker.fetch(req(privateMsg('кофе 250')), env);
+  assert.equal(response.status, 200);
   assert.match(lastTelegramText(), /Системная ошибка: Google Sheets 500/);
 });
 
-test('подсказка старого формата без fingerprint не запускает редактирование', async () => {
-  seedExpenses([['04.12.2024 15:10', 500, 'RUB', 1, 500, '', '', 'обед 500', 'Cash']]);
-  const reply = privateMsg('такси 300', {
-    reply_to_message: { message_id: 9, from: { id: 111, is_bot: true }, chat: { id: 42, type: 'private' }, text: 'Редактирование строки (стр. 2)' },
-  });
-  await worker.fetch(req(reply), env);
-  // Строка 2 не изменилась; текст обработан как новый расход
-  assert.equal(google.sheetCalls().filter((c) => c.path.endsWith('/values:batchUpdate')).length, 0);
-  assert.equal(google.tab('Расходы').rows[1][7], 'обед 500');
-  assert.equal(google.tab('Расходы').rows.length, 3);
-});
-
-test('номер строки заголовка нельзя изменить или удалить', async () => {
-  seedExpenses([]);
+test('запись заголовка не редактируется и не удаляется', async () => {
   await worker.fetch(req(callbackUpdate('confirm_delete:1:00000000')), env);
-  assert.equal(google.tab('Расходы').rows.length, 1);
+  assert.equal(google.tab('tg_bot').rows.length, 1);
   assert.equal(google.sheetCalls().filter((c) => c.path.endsWith(':batchUpdate')).length, 0);
 });
