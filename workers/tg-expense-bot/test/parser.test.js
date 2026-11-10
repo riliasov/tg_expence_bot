@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft } from '../src/parser.js';
+import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft, hasUnresolvedAmountAmbiguity } from '../src/parser.js';
 
 const parse = (text) => parseExpense(text);
 
@@ -103,6 +103,9 @@ test('распознавание неполных черновиков и без
   assert.deepEqual(detectExpenseDraft('еда vnd'), { kind: 'amount', text: 'еда vnd' });
   assert.equal(completeExpenseDraft('40 vnd', 'еда', 'description').amount, -40000);
   assert.equal(completeExpenseDraft('еда vnd', '40', 'amount').amount, -40000);
+  assert.equal(hasUnresolvedAmountAmbiguity('50 60'), true);
+  assert.equal(hasUnresolvedAmountAmbiguity('такси 40'), false);
+  assert.equal(hasUnresolvedAmountAmbiguity('кофе 50 60 vnd'), false);
   assert.throws(() => completeExpenseDraft('40 vnd', '50', 'description'), (e) => e instanceof ParseError && e.code === 'ambiguous_reply');
   assert.throws(() => completeExpenseDraft('еда usd', '40 vnd', 'amount'), (e) => e instanceof ParseError && e.code === 'ambiguous_reply');
 });

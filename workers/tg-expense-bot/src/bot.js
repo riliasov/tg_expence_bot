@@ -2,7 +2,7 @@
 // режим редактирования определяется по reply на подсказку с "(стр. N, #fingerprint)".
 // Любое действие над строкой сначала сверяет fingerprint, чтобы не затронуть сдвинувшуюся строку.
 
-import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft } from './parser.js';
+import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft, hasUnresolvedAmountAmbiguity } from './parser.js';
 import * as sheets from './sheets.js';
 import * as tg from './telegram.js';
 import { esc, formatAmount, formatShortDate } from './format.js';
@@ -156,6 +156,10 @@ async function handleAdd(env, chatId, msg, text) {
 }
 
 async function handleExpenseDraftReply(env, chatId, msg, draft) {
+  if (hasUnresolvedAmountAmbiguity(msg.text)) {
+    return tg.sendMessage(env, chatId, '⚠️ В ответе несколько возможных сумм. Укажи валюту или отправь расход целиком с одной суммой.', MAIN_KEYBOARD);
+  }
+
   let expense;
   try {
     // A complete operation always stands alone, even when it replies to an older prompt.

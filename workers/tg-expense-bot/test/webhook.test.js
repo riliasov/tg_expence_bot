@@ -216,7 +216,7 @@ test('просроченный неполный ответ не сохраняе
   assert.match(lastTelegramText(), /Черновик истёк/);
 });
 
-test('reply на чужое сообщение, неправильный контекст и неоднозначный ответ не склеиваются', async () => {
+test('чужой reply и неоднозначные суммы не пишутся, полная новая операция обрабатывается отдельно', async () => {
   await worker.fetch(req(privateMsg('40 vnd')), env);
   const prompt = ownBotPromptReply();
 
@@ -233,7 +233,12 @@ test('reply на чужое сообщение, неправильный кон�
 
   await worker.fetch(req(privateMsg('50 60', { reply_to_message: prompt })), env);
   assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0);
-  assert.match(lastTelegramText(), /Ответ неполный или неоднозначный/);
+  assert.match(lastTelegramText(), /несколько возможных сумм/);
+
+  await worker.fetch(req(privateMsg('такси 40', { date: DATE + 60, reply_to_message: prompt })), env);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-40, 'RUB']);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'такси');
 });
 
 test('полный расход в reply обрабатывается самостоятельно, даже после срока черновика', async () => {
