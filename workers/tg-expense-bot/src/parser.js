@@ -149,7 +149,9 @@ export function parseExpense(raw) {
   if (!description) throw new ParseError('Ошибка: укажите описание');
 
   return {
-    amount: best.amount,
+    // This parser handles expenses, so amounts are always stored as outflows.
+    // A leading minus is accepted but is not required from the user.
+    amount: -Math.abs(best.amount),
     currency,
     source,
     description,

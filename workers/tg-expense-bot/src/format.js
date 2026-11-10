@@ -20,8 +20,8 @@ export function formatSheetDate(date, offsetHours = 0) {
   return `${p(d.getUTCDate())}.${p(d.getUTCMonth() + 1)}.${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-/** "DD.MM.YYYY HH:MM" -> "HH:MM DD/MM"; иной формат возвращается как есть. */
+/** "DD.MM.YYYY HH:MM[:SS]" -> "HH:MM DD/MM"; иной формат возвращается как есть. */
 export function formatShortDate(text) {
-  const m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})$/.exec(text ?? '');
+  const m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})(?::\d{2})?$/.exec(text ?? '');
   return m ? `${m[4]}:${m[5]} ${m[1]}/${m[2]}` : (text ?? '');
 }

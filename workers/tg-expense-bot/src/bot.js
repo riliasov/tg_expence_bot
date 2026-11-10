@@ -41,7 +41,7 @@ const HOME_TEXT =
 const STALE_TEXT = '⚠️ Запись изменилась или не найдена. Откройте список заново: /last';
 
 function describeEntry(entry) {
-  return `${formatShortDate(entry.date)} ${esc(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)} (<i>${esc(entry.raw_text)}</i>)`;
+  return `${formatShortDate(entry.timestamp)} ${esc(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)} (<i>${esc(entry.description)}</i>)`;
 }
 
 function renderList(rows) {
@@ -56,7 +56,7 @@ function renderDetails(entry) {
   return (
     `🔍 <b>Детали записи (стр. ${entry.row_number}):</b>\n\n` +
     `${describeEntry(entry)}\n\n` +
-    `<i>Исходный текст: ${esc(entry.raw_text)}</i>`
+    `<i>Описание: ${esc(entry.description)}</i>`
   );
 }
 
@@ -172,7 +172,7 @@ async function handleCallback(env, cq) {
         env,
         chatId,
         `✏️ Редактирование строки (стр. ${rowNumber}, #${fp})\n` +
-          `Исходный текст: <code>${esc(entry.raw_text)}</code>\n\n` +
+          `Текущая запись: <code>${esc(entry.description)} ${esc(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)}</code>\n\n` +
           'Ответьте на это сообщение новым текстом записи. /cancel — отмена.',
         { reply_markup: { force_reply: true, input_field_placeholder: 'продукты 500 тбанк' } },
       );

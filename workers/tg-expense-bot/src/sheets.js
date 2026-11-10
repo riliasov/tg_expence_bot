@@ -4,14 +4,16 @@
 // Инвариант безопасности: каждая операция с листом сначала резолвит title по SHEET_GID
 // и адресует только его. Если SHEET_GID не задан или не найден — запись блокируется (fail closed).
 
-import { formatSheetDate } from './format.js';
-
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 // RFC 7523 JWT bearer grant. Значение совпадает с google-auth (urn:ietf:params:oauth:..., без "2").
 export const JWT_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const TOKEN_TTL_SEC = 3600;
+export const SHEET_HEADERS = [
+  'Timestamp', 'Amount', 'Currency', 'FX RUB', 'RUB', 'Category', 'SubCategory',
+  'Description', 'Account', 'FX', 'Commission', 'Purchase Currency', 'Operation Date',
+];
 
 const enc = new TextEncoder();
 let keyCache = null; // { pem, key }
@@ -108,14 +110,23 @@ export function requireGid(env) {
 export async function resolveSheetTitle(env) {
   const gid = requireGid(env);
   const key = `${env.SPREADSHEET_ID}:${gid}`;
-  if (sheetCache && sheetCache.key === key) return sheetCache.title;
+  let title;
+  if (sheetCache && sheetCache.key === key) {
+    title = sheetCache.title;
+  } else {
+    const data = await sheetsCall(env, 'GET', '?fields=sheets.properties(sheetId,title)');
+    const found = (data.sheets ?? []).map((s) => s.properties).find((p) => p.sheetId === gid);
+    if (!found) throw new Error(`Лист с gid=${gid} не найден в таблице. Запись заблокирована.`);
+    title = found.title;
+    sheetCache = { key, title };
+  }
 
-  const data = await sheetsCall(env, 'GET', '?fields=sheets.properties(sheetId,title)');
-  const found = (data.sheets ?? []).map((s) => s.properties).find((p) => p.sheetId === gid);
-  if (!found) throw new Error(`Лист с gid=${gid} не найден в таблице. Запись заблокирована.`);
-
-  sheetCache = { key, title: found.title };
-  return found.title;
+  // Refuse to read or mutate legacy rows through the new A:M mapping.
+  const header = await sheetsCall(env, 'GET', `/values/${pathRange(title, 'A1:M1')}`);
+  if (JSON.stringify(header.values?.[0] ?? []) !== JSON.stringify(SHEET_HEADERS)) {
+    throw new Error('Заголовки A:M не совпадают с целевой схемой. Операция заблокирована.');
+  }
+  return title;
 }
 
 /** A1-диапазон с явным листом: 'Название листа'!A1:B2 (апострофы экранируются). */
@@ -125,40 +136,101 @@ export function a1(title, range) {
 
 const pathRange = (title, range) => encodeURIComponent(a1(title, range));
 
-/** Колонки B..E: сумма, валюта, курс, рубли. Не трогают A (дата), F:G (ручные категории), H:I. */
+/** Колонки B..E: сумма, валюта, FX RUB, RUB. */
 export function amountCells(expense) {
   const isRub = expense.currency === 'RUB';
-  return [expense.amount, expense.currency, isRub ? 1 : '', isRub ? expense.amount : ''];
+  const amount = -Math.abs(Number(expense.amount));
+  return [amount, expense.currency, isRub ? 1 : '', isRub ? amount : ''];
 }
 
-/** Колонки H..I: исходный текст и источник. */
+/** Колонки H..I: описание и счёт. */
 export function textCells(expense) {
-  return [expense.raw_text, expense.source];
+  return [expense.description, expense.source];
 }
 
-/** Колонки B..I для новой строки: F:G остаются пустыми для ручного заполнения. */
+/** Колонки B..L. При создании категория — «Покупка», остальные ручные поля пусты. */
 export function expenseCells(expense) {
-  return [...amountCells(expense), '', '', ...textCells(expense)];
+  return [
+    ...amountCells(expense),
+    'Покупка', '',
+    ...textCells(expense),
+    '', '',
+    expense.currency,
+  ];
 }
 
-const COLS = 9; // A:I
+const COLS = 13; // A:M
+
+const SHEETS_EPOCH_DAYS = 25_569; // 1899-12-30 to 1970-01-01
+const MS_PER_DAY = 86_400_000;
+
+function localDateParts(date, offsetHours) {
+  const instant = date instanceof Date ? date : new Date(date);
+  if (!Number.isFinite(instant.getTime())) throw new Error('Некорректная дата операции');
+  const shifted = new Date(instant.getTime() + offsetHours * 3_600_000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    second: shifted.getUTCSeconds(),
+  };
+}
+
+/** Native Sheets date-time serial for the spreadsheet's UTC+5 wall clock. */
+export function sheetDateTimeSerial(date, offsetHours = 5) {
+  const p = localDateParts(date, offsetHours);
+  const localMidnight = Date.UTC(p.year, p.month, p.day);
+  const seconds = p.hour * 3600 + p.minute * 60 + p.second;
+  return SHEETS_EPOCH_DAYS + localMidnight / MS_PER_DAY + seconds / 86_400;
+}
+
+/** Native Sheets date serial for the operation's local calendar day. */
+export function sheetDateSerial(date, offsetHours = 5) {
+  const p = localDateParts(date, offsetHours);
+  return SHEETS_EPOCH_DAYS + Date.UTC(p.year, p.month, p.day) / MS_PER_DAY;
+}
 
 function toEntry(cells, rowNumber) {
   const c = [...cells];
   while (c.length < COLS) c.push('');
   return {
     row_number: rowNumber,
+    timestamp: c[0],
     date: c[0],
     amount: c[1],
     currency: c[2],
-    raw_text: c[7],
+    fx_rub: c[3],
+    rub: c[4],
+    category: c[5],
+    subcategory: c[6],
+    description: c[7],
     source: c[8],
+    fx: c[9],
+    commission: c[10],
+    purchase_currency: c[11],
+    operation_date: c[12],
   };
 }
 
 /** Короткий отпечаток строки (FNV-1a, 8 hex). Защищает от действий над сдвинувшейся строкой. */
 export function fingerprint(entry) {
-  const s = [entry.date, entry.amount, entry.currency, entry.raw_text, entry.source].join('|');
+  const s = JSON.stringify([
+    entry.timestamp ?? entry.date,
+    entry.amount,
+    entry.currency,
+    entry.fx_rub,
+    entry.rub,
+    entry.category,
+    entry.subcategory,
+    entry.description,
+    entry.source,
+    entry.fx,
+    entry.commission,
+    entry.purchase_currency,
+    entry.operation_date,
+  ]);
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -170,12 +242,13 @@ export function fingerprint(entry) {
 /** Запись в конец листа. RAW: текст никогда не интерпретируется как формула. 1 запрос. */
 export async function appendExpense(env, expense, messageDate) {
   const title = await resolveSheetTitle(env);
-  const dateText = formatSheetDate(messageDate, Number(env.TZ_OFFSET_HOURS ?? 0));
+  const offset = Number(env.TZ_OFFSET_HOURS ?? 5);
+  if (!Number.isFinite(offset)) throw new Error('Некорректный TZ_OFFSET_HOURS');
   await sheetsCall(
     env,
     'POST',
-    `/values/${pathRange(title, 'A:I')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
-    { values: [[dateText, ...expenseCells(expense)]] },
+    `/values/${pathRange(title, 'A:M')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    { values: [[sheetDateTimeSerial(messageDate, offset), ...expenseCells(expense), sheetDateSerial(messageDate, offset)]] },
   );
 }
 
@@ -185,7 +258,7 @@ async function countRows(env, title) {
 }
 
 async function readRows(env, title, from, to) {
-  const data = await sheetsCall(env, 'GET', `/values/${pathRange(title, `A${from}:I${to}`)}`);
+  const data = await sheetsCall(env, 'GET', `/values/${pathRange(title, `A${from}:M${to}`)}`);
   return data.values ?? [];
 }
 
@@ -209,7 +282,7 @@ export async function getRow(env, rowNumber) {
 }
 
 /**
- * Обновляет только B:E и H:I выбранной строки. F:G (ручные категории) не трогаются.
+ * Обновляет только B:E, H:I и L. Ручные категории, курсы, комиссии и даты не трогаются.
  * Одним batchUpdate. 1 запрос.
  */
 export async function updateRow(env, rowNumber, expense) {
@@ -220,6 +293,7 @@ export async function updateRow(env, rowNumber, expense) {
     data: [
       { range: a1(title, `B${rowNumber}:E${rowNumber}`), values: [amountCells(expense)] },
       { range: a1(title, `H${rowNumber}:I${rowNumber}`), values: [textCells(expense)] },
+      { range: a1(title, `L${rowNumber}:L${rowNumber}`), values: [[expense.currency]] },
     ],
   });
 }
