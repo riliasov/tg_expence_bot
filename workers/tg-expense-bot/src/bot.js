@@ -157,7 +157,7 @@ async function handleAdd(env, chatId, msg, text) {
 
 async function handleExpenseDraftReply(env, chatId, msg, draft) {
   if (hasUnresolvedAmountAmbiguity(msg.text)) {
-    return tg.sendMessage(env, chatId, '⚠️ В ответе несколько возможных сумм. Укажи валюту или отправь расход целиком с одной суммой.', MAIN_KEYBOARD);
+    return tg.sendMessage(env, chatId, '⚠️ В ответе несколько возможных сумм. Отправь расход целиком с одной суммой.', MAIN_KEYBOARD);
   }
 
   let expense;

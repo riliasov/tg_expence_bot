@@ -153,10 +153,10 @@ export function detectExpenseDraft(raw) {
   return null;
 }
 
-/** Multiple amounts without an explicit currency leave the intended amount unclear. */
+/** Several independent amounts remain ambiguous even when a currency is present. */
 export function hasUnresolvedAmountAmbiguity(raw) {
   const info = inspect(cleanText(raw));
-  return info.candidates.length > 1 && info.currencies.length === 0;
+  return info.candidates.length > 1;
 }
 
 /** Combine one unambiguous reply with a message-text draft; no external state is used. */

@@ -231,14 +231,21 @@ test('чужой reply и неоднозначные суммы не пишут�
   })), env);
   assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0);
 
-  await worker.fetch(req(privateMsg('50 60', { reply_to_message: prompt })), env);
-  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0);
-  assert.match(lastTelegramText(), /несколько возможных сумм/);
+  for (const ambiguous of ['50 60', '50 60 vnd']) {
+    await worker.fetch(req(privateMsg(ambiguous, { reply_to_message: prompt })), env);
+    assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0, ambiguous);
+    assert.match(lastTelegramText(), /несколько возможных сумм/);
+  }
+
+  await worker.fetch(req(privateMsg('50 000 vnd такси', { date: DATE + 40, reply_to_message: prompt })), env);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-50000, 'VND']);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'такси');
 
   await worker.fetch(req(privateMsg('такси 40', { date: DATE + 60, reply_to_message: prompt })), env);
-  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
-  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-40, 'RUB']);
-  assert.equal(google.tab('tg_bot').rows[1][7], 'такси');
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 2);
+  assert.deepEqual(google.tab('tg_bot').rows[2].slice(1, 3), [-40, 'RUB']);
+  assert.equal(google.tab('tg_bot').rows[2][7], 'такси');
 });
 
 test('полный расход в reply обрабатывается самостоятельно, даже после срока черновика', async () => {

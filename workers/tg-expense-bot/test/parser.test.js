@@ -104,8 +104,9 @@ test('распознавание неполных черновиков и без
   assert.equal(completeExpenseDraft('40 vnd', 'еда', 'description').amount, -40000);
   assert.equal(completeExpenseDraft('еда vnd', '40', 'amount').amount, -40000);
   assert.equal(hasUnresolvedAmountAmbiguity('50 60'), true);
+  assert.equal(hasUnresolvedAmountAmbiguity('50 60 vnd'), true);
   assert.equal(hasUnresolvedAmountAmbiguity('такси 40'), false);
-  assert.equal(hasUnresolvedAmountAmbiguity('кофе 50 60 vnd'), false);
+  assert.equal(hasUnresolvedAmountAmbiguity('50 000 vnd такси'), false);
   assert.throws(() => completeExpenseDraft('40 vnd', '50', 'description'), (e) => e instanceof ParseError && e.code === 'ambiguous_reply');
   assert.throws(() => completeExpenseDraft('еда usd', '40 vnd', 'amount'), (e) => e instanceof ParseError && e.code === 'ambiguous_reply');
 });
