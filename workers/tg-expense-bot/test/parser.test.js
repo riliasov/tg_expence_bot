@@ -4,12 +4,19 @@ import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft, has
 
 const parse = (text) => parseExpense(text);
 
-test('простой расход в рублях по умолчанию', () => {
-  const r = parse('кофе 250');
-  assert.equal(r.amount, -250);
-  assert.equal(r.currency, 'RUB');
-  assert.equal(r.description, 'кофе');
-  assert.equal(r.source, 'Cash');
+test('VND по умолчанию и короткие суммы по всем примерам', () => {
+  const cases = [
+    ['100 еда', -100000, 'VND', 'Cash', 'еда'],
+    ['25 кофе', -25000, 'VND', 'Cash', 'кофе'],
+    ['25 кофе нал', -25000, 'VND', 'Cash', 'кофе'],
+    ['100000 еда', -100000, 'VND', 'Cash', 'еда'],
+    ['100000 продукты', -100000, 'VND', 'Cash', 'продукты'],
+    ['1000 руб еда', -1000, 'RUB', 'Cash', 'еда'],
+    ['40 usd такси', -40, 'USD', 'Cash', 'такси'],
+  ];
+  for (const [text, amount, currency, source, description] of cases) {
+    assert.deepEqual(parse(text), { amount, currency, source, description, raw_text: text });
+  }
 });
 
 test('источник в конце и в начале', () => {
@@ -37,20 +44,20 @@ test('сумма с пробелом как разделителем тысяч'
 });
 
 test('десятичная сумма с точкой сохраняется', () => {
-  const r = parse('кофе 250.50');
+  const r = parse('кофе 250.50 руб');
   assert.equal(r.amount, -250.5);
   assert.equal(r.description, 'кофе');
 });
 
 test('десятичная сумма с запятой сохраняется', () => {
-  const r = parse('обед 500,75');
+  const r = parse('обед 500,75 руб');
   assert.equal(r.amount, -500.75);
   assert.equal(r.description, 'обед');
 });
 
 test('точка и запятая как разделители тысяч', () => {
   assert.equal(parse('еда 1.500').amount, -1500);
-  assert.equal(parse('еда 1,500.50').amount, -1500.5);
+  assert.equal(parse('еда 1,500.50 руб').amount, -1500.5);
   assert.equal(parse('еда 12.5 eur').amount, -12.5);
 });
 
@@ -72,6 +79,11 @@ test('краткие суммы VND масштабируются один раз
   assert.equal(parse('-999 внг еда').amount, -999000);
   assert.equal(parse('250000 vnd еда').amount, -250000);
   assert.equal(parse('1000000 vnd аренда').amount, -1000000);
+  assert.equal(parse('100 еда').amount, -100000);
+  assert.equal(parse('25 кофе нал').amount, -25000);
+  assert.equal(parse('100000 продукты').amount, -100000);
+  assert.equal(parse('1000 руб еда').amount, -1000);
+  assert.equal(parse('40 usd такси').amount, -40);
   assert.equal(parse('40 usd еда').amount, -40);
   assert.equal(parse('40 BND еда').currency, 'BND');
   assert.equal(parse('40 BND еда').amount, -40);
@@ -84,8 +96,12 @@ test('новые и старые алиасы VND распознаются от�
     assert.equal(expense.description, 'еда', alias);
   }
   const substring = parse('еда vngcoffee 40');
-  assert.equal(substring.currency, 'RUB');
+  assert.equal(substring.currency, 'VND');
+  assert.equal(substring.amount, -40000);
   assert.equal(substring.description, 'еда vngcoffee');
+  const explicit = parse('еда vngcoffee 40 руб');
+  assert.equal(explicit.currency, 'RUB');
+  assert.equal(explicit.description, 'еда vngcoffee');
   assert.equal(parse('еда (внг) 40').currency, 'VND');
 });
 
@@ -103,6 +119,8 @@ test('распознавание неполных черновиков и без
   assert.deepEqual(detectExpenseDraft('еда vnd'), { kind: 'amount', text: 'еда vnd' });
   assert.equal(completeExpenseDraft('40 vnd', 'еда', 'description').amount, -40000);
   assert.equal(completeExpenseDraft('еда vnd', '40', 'amount').amount, -40000);
+  assert.equal(completeExpenseDraft('40', 'еда', 'description').amount, -40000);
+  assert.equal(completeExpenseDraft('еда', '40', 'amount').amount, -40000);
   assert.equal(hasUnresolvedAmountAmbiguity('50 60'), true);
   assert.equal(hasUnresolvedAmountAmbiguity('50 60 vnd'), true);
   assert.equal(hasUnresolvedAmountAmbiguity('такси 40'), false);
@@ -157,10 +175,12 @@ test('ввод без описания', () => {
 test('символы валют не мешают сумме', () => {
   assert.equal(parse('₽500 еда').amount, -500);
   assert.equal(parse('$30 кино').amount, -30);
+  assert.equal(parse('$30 кино').currency, 'USD');
+  assert.equal(parse('₸500 кино').currency, 'KZT');
 });
 
 test('расходы всегда отрицательные, даже если пользователь ввёл сумму с плюсом', () => {
-  const r = parse('-500 возврат');
+  const r = parse('-500 руб возврат');
   assert.equal(r.amount, -500);
   assert.equal(r.description, 'возврат');
 });

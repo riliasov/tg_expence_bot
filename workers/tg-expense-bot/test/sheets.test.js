@@ -4,7 +4,7 @@ import {
   buildJwt, importPrivateKey, b64url, expenseCells, amountCells, textCells,
   a1, requireGid, fingerprint, sheetDateSerial, sheetDateTimeSerial,
 } from '../src/sheets.js';
-import { formatAmount, formatSheetDate, formatShortDate, esc } from '../src/format.js';
+import { formatAmount, formatExpenseAmount, formatSheetDate, formatShortDate, esc } from '../src/format.js';
 import { parseExpense } from '../src/parser.js';
 
 async function makeServiceAccount() {
@@ -45,7 +45,7 @@ test('b64url без паддинга и без + и /', () => {
 });
 
 test('13 значений A:M соответствуют целевой схеме, расход отрицательный', () => {
-  const rub = expenseCells(parseExpense('кофе 250.5 нал'));
+  const rub = expenseCells(parseExpense('кофе 250.5 руб нал'));
   assert.deepEqual(rub, [-250.5, 'RUB', 1, -250.5, 'Покупка', '', 'кофе', 'Cash', '', '', 'RUB']);
 
   const vnd = expenseCells(parseExpense('кофе 50000 vnd сбер'));
@@ -67,6 +67,10 @@ test('форматирование сумм, дат и текста Telegram', (
   assert.equal(formatAmount(-250), '-250');
   assert.equal(formatAmount(-250.5), '-250.5');
   assert.equal(formatAmount(-250.25), '-250.25');
+  assert.equal(formatAmount(100000), '100 000');
+  assert.equal(formatAmount(-123456.75), '-123 456.75');
+  assert.equal(formatExpenseAmount(-100000), '100 000');
+  assert.equal(formatExpenseAmount('-1,234.50'), '1 234.5');
   // 2024-12-04 10:30 UTC -> 15:30 при UTC+5
   assert.equal(formatSheetDate(new Date('2024-12-04T10:30:00Z'), 5), '04.12.2024 15:30');
   assert.equal(formatShortDate('04.12.2024 15:10:23'), '15:10 04/12');
@@ -75,7 +79,7 @@ test('форматирование сумм, дат и текста Telegram', (
 });
 
 test('редактирование меняет расчётные поля, не включает ручные поля', () => {
-  const e = parseExpense('такси 300 сбер');
+  const e = parseExpense('такси 300 руб сбер');
   assert.deepEqual(amountCells(e), [-300, 'RUB', 1, -300]);
   assert.deepEqual(textCells(e), ['такси', 'Sber']);
 });

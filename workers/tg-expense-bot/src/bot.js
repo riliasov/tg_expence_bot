@@ -5,7 +5,7 @@
 import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft, hasUnresolvedAmountAmbiguity } from './parser.js';
 import * as sheets from './sheets.js';
 import * as tg from './telegram.js';
-import { esc, formatAmount, formatShortDate } from './format.js';
+import { esc, formatExpenseAmount, formatShortDate, parseFormattedNumber } from './format.js';
 
 const LIST_BUTTON = 'Посмотреть последние записи';
 const EDIT_MARK = /Редактирование строки \(стр\. (\d+), #([0-9a-f]{8})\)/;
@@ -18,32 +18,50 @@ const MAIN_KEYBOARD = {
 
 const START_TEXT =
   '👋 Привет! Я бот для учета расходов.\n' +
-  'Просто отправь мне сумму и описание, например:\n' +
-  'продукты 500 тбанк';
+  'Просто отправь сумму и описание, например: 100 еда.\n' +
+  'Если валюту не указать, используется VND.';
 
 const HELP_TEXT =
   '🤖 <b>Справка по командам:</b>\n\n' +
   '📝 <b>Добавление расхода:</b>\n' +
-  'Просто напишите сообщение, например:\n' +
-  '• <i>продукты 500</i>\n' +
-  '• <i>такси 300 сбер</i>\n' +
-  '• <i>30 usd подарок</i>\n' +
-  '• <i>50000 vnd кофе</i>\n' +
-  '• <i>12.50 eur чай</i>\n\n' +
+  'Без валюты суммы считаются в VND; значения от 1 до 999 — это тысячи донгов.\n' +
+  'Суммы VND указывай целым числом донгов.\n' +
+  'Примеры:\n' +
+  '• <i>100 еда</i>\n' +
+  '• <i>25 кофе нал</i>\n' +
+  '• <i>100000 продукты</i>\n' +
+  '• <i>1000 руб еда</i>\n' +
+  '• <i>40 usd такси</i>\n' +
+  '• <i>50000 vnd кофе</i>\n\n' +
   '🛠 <b>Команды:</b>\n' +
   '/start — Перезапуск и показ меню\n' +
   '/help — Эта справка\n' +
   '/last — Показать последние записи\n' +
-  '/cancel — Отменить редактирование';
+  '/cancel — Отменить редактирование или ввод расхода';
 
 const HOME_TEXT =
   '🏠 Главное меню\n\n' +
-  'Просто отправь мне сумму и описание, например: продукты 500 тбанк.';
+  'Отправь сумму и описание, например: 100 еда. Валюта по умолчанию — VND.';
 
 const STALE_TEXT = '⚠️ Запись изменилась или не найдена. Откройте список заново: /last';
 
 function describeEntry(entry) {
-  return `${formatShortDate(entry.timestamp)} ${esc(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)} (<i>${esc(entry.description)}</i>)`;
+  return `${formatShortDate(entry.timestamp)} ${formatExpenseAmount(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)} (<i>${esc(entry.description)}</i>)`;
+}
+
+function matchesAppendedExpense(entry, rowNumber, expense) {
+  if (!entry || entry.row_number !== rowNumber) return false;
+  const expected = sheets.expenseCells(expense);
+  const actual = [
+    entry.amount, entry.currency, entry.fx_rub, entry.rub, entry.category, entry.subcategory,
+    entry.description, entry.source, entry.fx, entry.commission, entry.purchase_currency,
+  ];
+  return expected.every((value, index) => {
+    const cell = actual[index];
+    if (value === '') return cell === '' || cell === null || cell === undefined;
+    if (typeof value === 'number') return parseFormattedNumber(cell) === value;
+    return String(cell ?? '') === String(value);
+  });
 }
 
 function renderList(rows) {
@@ -72,6 +90,19 @@ function rowActionKeyboard(entry) {
         [{ text: '🗑 Удалить', callback_data: `delete_row:${n}:${fp}` }],
         [{ text: '🔙 Назад', callback_data: 'back_to_list' }],
         [{ text: '🏠 В начало', callback_data: 'home' }],
+      ],
+    },
+  };
+}
+
+function addedActionKeyboard(entry) {
+  const n = entry.row_number;
+  const fp = sheets.fingerprint(entry);
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✏️ Исправить', callback_data: `edit_row:${n}:${fp}` }],
+        [{ text: '↩️ Отменить запись', callback_data: `delete_row:${n}:${fp}` }],
       ],
     },
   };
@@ -188,10 +219,24 @@ async function handleExpenseDraftReply(env, chatId, msg, draft) {
 }
 
 async function saveExpense(env, chatId, msg, expense) {
-  await sheets.appendExpense(env, expense, new Date(msg.date * 1000));
+  const rowNumber = await sheets.appendExpense(env, expense, new Date(msg.date * 1000));
   const reply =
-    `✅ Добавлено: ${esc(expense.description)} | ${formatAmount(expense.amount)} ${expense.currency} | ${esc(expense.source)}`;
-  return tg.sendMessage(env, chatId, reply, MAIN_KEYBOARD);
+    `✅ Добавлено: ${esc(expense.description)} | ${formatExpenseAmount(expense.amount)} ${expense.currency} | ${esc(expense.source)}`;
+  if (!rowNumber) {
+    return tg.sendMessage(env, chatId, `${reply}\nПроверь запись через /last.`);
+  }
+
+  let entry;
+  try {
+    entry = await sheets.getRow(env, rowNumber);
+  } catch (err) {
+    console.error('expense saved; row readback failed:', err?.message);
+    return tg.sendMessage(env, chatId, `${reply}\nПроверь запись через /last.`);
+  }
+  if (!matchesAppendedExpense(entry, rowNumber, expense)) {
+    return tg.sendMessage(env, chatId, `${reply}\nПроверь запись через /last.`);
+  }
+  return tg.sendMessage(env, chatId, reply, addedActionKeyboard(entry));
 }
 
 async function handleEditReply(env, chatId, msg, rowNumber, fp) {
@@ -214,7 +259,7 @@ async function handleEditReply(env, chatId, msg, rowNumber, fp) {
   await sheets.updateRow(env, rowNumber, expense);
   const reply =
     `✅ Обновлено (стр. ${rowNumber}):\n` +
-    `${esc(expense.description)} - ${formatAmount(expense.amount)} ${expense.currency} - ${esc(expense.source)}`;
+    `${esc(expense.description)} | ${formatExpenseAmount(expense.amount)} ${expense.currency} | ${esc(expense.source)}`;
   return tg.sendMessage(env, chatId, reply, MAIN_KEYBOARD);
 }
 
@@ -250,9 +295,9 @@ async function handleCallback(env, cq) {
         env,
         chatId,
         `✏️ Редактирование строки (стр. ${rowNumber}, #${fp})\n` +
-          `Текущая запись: <code>${esc(entry.description)} ${esc(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)}</code>\n\n` +
+          `Текущая запись: <code>${esc(entry.description)} ${formatExpenseAmount(entry.amount)} ${esc(entry.currency)} ${esc(entry.source)}</code>\n\n` +
           'Ответьте на это сообщение новым текстом записи. /cancel — отмена.',
-        { reply_markup: { force_reply: true, input_field_placeholder: 'продукты 500 тбанк' } },
+        { reply_markup: { force_reply: true, input_field_placeholder: '100 еда' } },
       );
     }
 

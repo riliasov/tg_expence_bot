@@ -244,12 +244,20 @@ export async function appendExpense(env, expense, messageDate) {
   const title = await resolveSheetTitle(env);
   const offset = Number(env.TZ_OFFSET_HOURS ?? 5);
   if (!Number.isFinite(offset)) throw new Error('Некорректный TZ_OFFSET_HOURS');
-  await sheetsCall(
+  const data = await sheetsCall(
     env,
     'POST',
     `/values/${pathRange(title, 'A:M')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
     { values: [[sheetDateTimeSerial(messageDate, offset), ...expenseCells(expense), sheetDateSerial(messageDate, offset)]] },
   );
+  const updatedRange = data.updates?.updatedRange;
+  const quoted = /^'((?:[^']|'')*)'!A(\d+):M\d+$/.exec(updatedRange ?? '');
+  const unquoted = /^([^'!]+)!A(\d+):M\d+$/.exec(updatedRange ?? '');
+  const match = quoted ?? unquoted;
+  if (!match) return null; // Append succeeded; caller can confirm it without preparing row actions.
+  const responseTitle = quoted ? match[1].replace(/''/g, "'") : match[1];
+  if (responseTitle !== title) return null;
+  return Number(match[2]);
 }
 
 async function countRows(env, title) {

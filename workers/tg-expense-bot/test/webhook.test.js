@@ -100,6 +100,10 @@ const lastEditText = () => {
   const edits = google.telegramCalls('editMessageText');
   return JSON.parse(edits[edits.length - 1].raw).text;
 };
+const lastEditPayload = () => {
+  const edits = google.telegramCalls('editMessageText');
+  return JSON.parse(edits[edits.length - 1].raw);
+};
 
 test('без или с неверным secret token — 403 и никаких внешних вызовов', async () => {
   const r1 = await worker.fetch(req(privateMsg('кофе 250'), 'wrong'), env);
@@ -144,7 +148,11 @@ test('расход VND записывается во все 13 колонок A:
   assert.deepEqual(google.tab('tg_bot').rows[1], [
     EXPECTED_TS, -35000, 'VND', '', '', 'Покупка', '', 'кофе', 'Cash', '', '', 'VND', EXPECTED_DAY,
   ]);
-  assert.match(lastTelegramText(), /Добавлено: кофе \| -35000 VND \| Cash/);
+  assert.match(lastTelegramText(), /Добавлено: кофе \| 35 000 VND \| Cash/);
+  const actions = lastTelegramPayload().reply_markup.inline_keyboard.flat();
+  assert.deepEqual(actions.map((button) => button.text), ['✏️ Исправить', '↩️ Отменить запись']);
+  assert.match(actions[0].callback_data, /^edit_row:2:[0-9a-f]{8}$/);
+  assert.match(actions[1].callback_data, /^delete_row:2:[0-9a-f]{8}$/);
 
   const append = google.sheetCalls().find((c) => c.path.endsWith(':append'));
   assert.ok(append, 'используется values.append');
@@ -157,8 +165,19 @@ test('расход VND записывается во все 13 колонок A:
   assert.ok(google.sheetCalls().some((c) => c.method === 'GET' && decodeURIComponent(c.path).includes("'tg_bot'!A1:M1")));
 });
 
+test('/help объясняет VND по умолчанию и короткие суммы', async () => {
+  await worker.fetch(req(privateMsg('/help')), env);
+  const text = lastTelegramText();
+  assert.match(text, /Без валюты суммы считаются в VND/);
+  assert.match(text, /100 еда/);
+  assert.match(text, /25 кофе нал/);
+  assert.match(text, /1000 руб еда/);
+  assert.match(text, /40 usd такси/);
+  assert.match(text, /целым числом донгов/);
+});
+
 test('RUB расход получает FX RUB = 1, RUB равен отрицательному Amount', async () => {
-  await worker.fetch(req(privateMsg('кофе 35000 нал')), env);
+  await worker.fetch(req(privateMsg('кофе 35000 руб нал')), env);
   const row = google.tab('tg_bot').rows[1];
   assert.deepEqual(row.slice(1, 5), [-35000, 'RUB', 1, -35000]);
   assert.equal(row[11], 'RUB');
@@ -170,6 +189,58 @@ test('пользовательский текст записывается ли�
   assert.equal(row[7], '=HYPERLINK("x")');
   const append = google.sheetCalls().find((c) => c.path.endsWith(':append'));
   assert.match(append.search, /valueInputOption=RAW/);
+});
+
+test('append подтверждён, но readback HTTP 500: успех без кнопок и без повтора append', async () => {
+  google.failReadbackForRow(2);
+  const response = await worker.fetch(req(privateMsg('кофе 40')), env);
+  const payload = lastTelegramPayload();
+
+  assert.equal(response.status, 200);
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+  assert.match(payload.text, /✅ Добавлено: кофе \| 40 000 VND \| Cash/);
+  assert.match(payload.text, /Проверь запись через \/last/);
+  assert.doesNotMatch(payload.text, /Системная ошибка/);
+  assert.equal(payload.reply_markup, undefined);
+});
+
+test('append подтверждён, но readback пустой: успех без кнопок и без повтора append', async () => {
+  google.emptyReadbackForRow(2);
+  await worker.fetch(req(privateMsg('кофе 40')), env);
+  const payload = lastTelegramPayload();
+
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+  assert.match(payload.text, /✅ Добавлено: кофе \| 40 000 VND \| Cash/);
+  assert.match(payload.text, /Проверь запись через \/last/);
+  assert.equal(payload.reply_markup, undefined);
+});
+
+test('append без updatedRange подтверждён успехом, но кнопки не создаются', async () => {
+  google.setAppendRange(null);
+  await worker.fetch(req(privateMsg('кофе 40')), env);
+  const payload = lastTelegramPayload();
+
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+  assert.match(payload.text, /✅ Добавлено: кофе \| 40 000 VND \| Cash/);
+  assert.match(payload.text, /Проверь запись через \/last/);
+  assert.equal(payload.reply_markup, undefined);
+});
+
+test('несовпадающий readback не порождает кнопки для чужой строки', async () => {
+  google.overrideReadbackForRow(2, [
+    EXPECTED_TS, -999, 'RUB', 1, -999, 'Покупка', '', 'чужая запись', 'Cash', '', '', 'RUB', EXPECTED_DAY,
+  ]);
+  await worker.fetch(req(privateMsg('кофе 40')), env);
+  const payload = lastTelegramPayload();
+
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+  assert.match(payload.text, /✅ Добавлено: кофе \| 40 000 VND \| Cash/);
+  assert.match(payload.text, /Проверь запись через \/last/);
+  assert.equal(payload.reply_markup, undefined);
 });
 
 test('сумма без описания запрашивает ForceReply и пишет только после ответа', async () => {
@@ -244,7 +315,7 @@ test('чужой reply и неоднозначные суммы не пишут�
 
   await worker.fetch(req(privateMsg('такси 40', { date: DATE + 60, reply_to_message: prompt })), env);
   assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 2);
-  assert.deepEqual(google.tab('tg_bot').rows[2].slice(1, 3), [-40, 'RUB']);
+  assert.deepEqual(google.tab('tg_bot').rows[2].slice(1, 3), [-40000, 'VND']);
   assert.equal(google.tab('tg_bot').rows[2][7], 'такси');
 });
 
@@ -255,9 +326,66 @@ test('полный расход в reply обрабатывается самос
     reply_to_message: ownBotPromptReply(),
   })), env);
   assert.equal(google.tab('tg_bot').rows.length, 2);
-  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-40, 'RUB']);
+  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-40000, 'VND']);
   assert.equal(google.tab('tg_bot').rows[1][7], 'такси');
   assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+});
+
+test('кнопка Исправить редактирует исходную строку без добавления новой', async () => {
+  await worker.fetch(req(privateMsg('кофе 40')), env);
+  const buttons = lastTelegramPayload().reply_markup.inline_keyboard.flat();
+  const editData = buttons.find((button) => button.text === '✏️ Исправить').callback_data;
+  await worker.fetch(req(callbackUpdate(editData)), env);
+  const prompt = lastTelegramText();
+  assert.match(prompt, /Редактирование строки \(стр\. 2,/);
+
+  await worker.fetch(req(privateMsg('еда 25', {
+    reply_to_message: {
+      message_id: 21,
+      date: DATE,
+      from: { id: 111, is_bot: true },
+      chat: { id: 42, type: 'private' },
+      text: prompt,
+    },
+  })), env);
+
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-25000, 'VND']);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'еда');
+  assert.match(lastTelegramText(), /Обновлено[\s\S]*еда \| 25 000 VND/);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+});
+
+test('кнопка Отменить запись удаляет выбранную строку после добавления новых расходов', async () => {
+  await worker.fetch(req(privateMsg('первая 10 руб')), env);
+  const buttons = lastTelegramPayload().reply_markup.inline_keyboard.flat();
+  const deleteData = buttons.find((button) => button.text === '↩️ Отменить запись').callback_data;
+  await worker.fetch(req(privateMsg('вторая 20 руб')), env);
+  assert.equal(google.tab('tg_bot').rows.length, 3);
+
+  await worker.fetch(req(callbackUpdate(deleteData)), env);
+  assert.match(lastEditText(), /Удалить запись \(стр\. 2\)/);
+  const confirmation = lastEditPayload().reply_markup.inline_keyboard.flat()
+    .find((button) => button.text === '🗑 Да, удалить').callback_data;
+  await worker.fetch(req(callbackUpdate(confirmation)), env);
+
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'вторая');
+  assert.equal(google.tab('tg_bot').rows[1][1], -20);
+  assert.deepEqual(google.tab('Банк').rows, [TARGET_HEADER]);
+});
+
+test('быстрая отмена безопасно отказывает при устаревшем fingerprint', async () => {
+  await worker.fetch(req(privateMsg('еда 10 руб')), env);
+  const undo = lastTelegramPayload().reply_markup.inline_keyboard.flat()
+    .find((button) => button.text === '↩️ Отменить запись').callback_data;
+  google.tab('tg_bot').rows[1][5] = 'ручная правка';
+
+  await worker.fetch(req(callbackUpdate(undo)), env);
+  assert.match(lastEditText(), /изменилась или не найдена/);
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.equal(google.tab('tg_bot').rows[1][5], 'ручная правка');
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':batchUpdate')).length, 0);
 });
 
 test('слишком длинный ввод отклоняется без чтения или записи Sheets', async () => {
@@ -290,8 +418,10 @@ test('редактирование обновляет только B:E, H:I и L
   await worker.fetch(req(callbackUpdate(`edit_row:2:${fp}`)), env);
   const prompt = lastTelegramText();
   assert.match(prompt, new RegExp(`стр\\. 2, #${fp}`));
+  assert.match(prompt, /Текущая запись: <code>обед 500 RUB Cash/);
+  assert.doesNotMatch(prompt, /обед -500 RUB/);
 
-  const reply = privateMsg('такси 300 сбер', {
+  const reply = privateMsg('такси 300 руб сбер', {
     reply_to_message: {
       message_id: 9,
       from: { id: 111, is_bot: true },
@@ -305,6 +435,7 @@ test('редактирование обновляет только B:E, H:I и L
   assert.deepEqual(row, [
     '04.12.2024 15:10:00', -300, 'RUB', 1, -300, 'Еда', 'Кафе', 'такси', 'Sber', 'manual FX', 'manual fee', 'RUB', '04.12.2024',
   ]);
+  assert.match(lastTelegramText(), /Обновлено[\s\S]*300 RUB/);
   const update = google.sheetCalls().find((c) => c.path.endsWith('/values:batchUpdate'));
   assert.equal(update.body.valueInputOption, 'RAW');
   assert.deepEqual(update.body.data.map((d) => d.range), [
@@ -332,6 +463,8 @@ test('удаление требует подтверждение и удаляе
   assert.equal(google.tab('tg_bot').rows.length, 2);
   assert.equal(google.sheetCalls().filter((c) => c.path.endsWith(':batchUpdate')).length, 0);
   assert.match(lastEditText(), /Удалить запись \(стр\. 2\)/);
+  assert.match(lastEditText(), /500 RUB Cash/);
+  assert.doesNotMatch(lastEditText(), /-500 RUB/);
 
   await worker.fetch(req(callbackUpdate(`confirm_delete:2:${fp}`)), env);
   assert.equal(google.tab('tg_bot').rows.length, 1);
@@ -347,8 +480,20 @@ test('/last показывает последние записи с времен
   ]);
   await worker.fetch(req(privateMsg('/last')), env);
   const text = lastTelegramText();
-  assert.match(text, /1\. 11:00 02\/12 -200 RUB Cash/);
-  assert.match(text, /2\. 10:00 01\/12 -100 RUB Cash/);
+  assert.match(text, /1\. 11:00 02\/12 200 RUB Cash/);
+  assert.match(text, /2\. 10:00 01\/12 100 RUB Cash/);
+  assert.doesNotMatch(text, /-200|-100/);
+});
+
+test('/last и детали показывают расход положительным значением', async () => {
+  seedExpenses([storedRow({ amount: '-12345', rub: '-12345' })]);
+  await worker.fetch(req(privateMsg('/last')), env);
+  assert.match(lastTelegramText(), /12 345 RUB/);
+  assert.doesNotMatch(lastTelegramText(), /-12 345/);
+
+  await worker.fetch(req(callbackUpdate('select_row:2')), env);
+  assert.match(lastEditText(), /12 345 RUB/);
+  assert.doesNotMatch(lastEditText(), /-12 345/);
 });
 
 test('ошибка Sheets видна владельцу, Worker отвечает Telegram HTTP 200', async () => {

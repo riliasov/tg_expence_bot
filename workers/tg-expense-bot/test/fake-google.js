@@ -28,6 +28,10 @@ export function createFakeGoogle({ tabs } = {}) {
   };
   const calls = [];
   let failSheets = false;
+  let failedReadbackRow = null;
+  let emptyReadbackRow = null;
+  const readbackOverrides = new Map();
+  let appendRangeOverride;
 
   function parseA1(decoded) {
     const m = /^'((?:[^']|'')+)'!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(decoded);
@@ -102,8 +106,14 @@ export function createFakeGoogle({ tabs } = {}) {
       const decoded = decodeURIComponent(encoded);
       if (method === 'POST' && decoded.endsWith(':append')) {
         const r = parseA1(decoded.slice(0, -':append'.length));
-        byTitle(r.title).rows.push(body.values[0].slice());
-        return json({});
+        const tab = byTitle(r.title);
+        tab.rows.push(body.values[0].slice());
+        const rowNumber = tab.rows.length;
+        const escapedTitle = r.title.replace(/'/g, "''");
+        const updatedRange = appendRangeOverride === undefined
+          ? `'${escapedTitle}'!A${rowNumber}:M${rowNumber}`
+          : appendRangeOverride;
+        return json({ updates: updatedRange ? { updatedRange } : {} });
       }
       const r = parseA1(decoded);
       const tab = byTitle(r.title);
@@ -114,11 +124,17 @@ export function createFakeGoogle({ tabs } = {}) {
           tab.rows.forEach((row, i) => { if (row?.[0] !== undefined && row[0] !== '') last = i; });
           return json({ values: tab.rows.slice(0, last + 1).map((row) => [row?.[0] ?? '']) });
         }
+        if (r.rowFrom === r.rowTo && failedReadbackRow === r.rowFrom) {
+          return json({ error: { message: 'readback failed' } }, 500);
+        }
+        if (r.rowFrom === r.rowTo && emptyReadbackRow === r.rowFrom) return json({});
         const from = r.rowFrom - 1;
         const to = r.rowTo;
-        const values = tab.rows.slice(from, to).map((row) => {
+        const values = tab.rows.slice(from, to).map((row, index) => {
+          const rowNumber = from + index + 1;
+          const source = readbackOverrides.get(rowNumber) ?? row;
           const cells = [];
-          for (let c = r.colFrom; c <= r.colTo; c++) cells.push(row?.[c] ?? '');
+          for (let c = r.colFrom; c <= r.colTo; c++) cells.push(source?.[c] ?? '');
           while (cells.length && cells[cells.length - 1] === '') cells.pop();
           return cells;
         });
@@ -136,6 +152,10 @@ export function createFakeGoogle({ tabs } = {}) {
     calls,
     tab: byTitle,
     setFailSheets(v) { failSheets = v; },
+    failReadbackForRow(row) { failedReadbackRow = row; },
+    emptyReadbackForRow(row) { emptyReadbackRow = row; },
+    overrideReadbackForRow(row, cells) { readbackOverrides.set(row, cells.slice()); },
+    setAppendRange(value) { appendRangeOverride = value; },
     sheetCalls: () => calls.filter((c) => c.url.includes('sheets.googleapis.com')),
     telegramCalls: (method) => calls.filter((c) => c.url.includes('api.telegram.org') && (!method || c.url.includes(`/${method}`))),
   };
