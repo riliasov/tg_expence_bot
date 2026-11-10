@@ -85,6 +85,17 @@ const lastTelegramText = () => {
   const sends = google.telegramCalls('sendMessage');
   return JSON.parse(sends[sends.length - 1].raw).text;
 };
+const lastTelegramPayload = () => {
+  const sends = google.telegramCalls('sendMessage');
+  return JSON.parse(sends[sends.length - 1].raw);
+};
+const ownBotPromptReply = () => ({
+  message_id: 100,
+  date: DATE,
+  from: { id: 111, is_bot: true },
+  chat: { id: 42, type: 'private' },
+  text: lastTelegramPayload().text,
+});
 const lastEditText = () => {
   const edits = google.telegramCalls('editMessageText');
   return JSON.parse(edits[edits.length - 1].raw).text;
@@ -159,6 +170,82 @@ test('пользовательский текст записывается ли�
   assert.equal(row[7], '=HYPERLINK("x")');
   const append = google.sheetCalls().find((c) => c.path.endsWith(':append'));
   assert.match(append.search, /valueInputOption=RAW/);
+});
+
+test('сумма без описания запрашивает ForceReply и пишет только после ответа', async () => {
+  await worker.fetch(req(privateMsg('40 внг')), env);
+  assert.equal(google.sheetCalls().length, 0, 'до ответа нет обращений к Google Sheets');
+  const prompt = lastTelegramPayload();
+  assert.equal(prompt.reply_markup.force_reply, true);
+  assert.match(prompt.text, /Укажи описание/);
+
+  await worker.fetch(req(privateMsg('еда', { date: DATE + 60, reply_to_message: ownBotPromptReply() })), env);
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-40000, 'VND']);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'еда');
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+});
+
+test('описание без суммы запрашивает ForceReply и объединяется с ответом', async () => {
+  await worker.fetch(req(privateMsg('кофе vnd')), env);
+  assert.equal(google.sheetCalls().length, 0);
+  const prompt = lastTelegramPayload();
+  assert.equal(prompt.reply_markup.force_reply, true);
+  assert.match(prompt.text, /Укажи сумму/);
+
+  await worker.fetch(req(privateMsg('25', { date: DATE + 30, reply_to_message: ownBotPromptReply() })), env);
+  const row = google.tab('tg_bot').rows[1];
+  assert.deepEqual(row.slice(1, 3), [-25000, 'VND']);
+  assert.equal(row[7], 'кофе');
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
+});
+
+test('команды в ответ на черновик не создают расходы', async () => {
+  await worker.fetch(req(privateMsg('40 vnd')), env);
+  const prompt = ownBotPromptReply();
+  for (const command of ['/cancel', '/start', '/help', '/unknown']) {
+    await worker.fetch(req(privateMsg(command, { date: DATE + 20, reply_to_message: prompt })), env);
+  }
+  assert.equal(google.sheetCalls().filter((call) => call.method === 'POST').length, 0);
+});
+
+test('просроченный неполный ответ не сохраняется', async () => {
+  await worker.fetch(req(privateMsg('40 vnd')), env);
+  await worker.fetch(req(privateMsg('еда', { date: DATE + 301, reply_to_message: ownBotPromptReply() })), env);
+  assert.equal(google.sheetCalls().length, 0);
+  assert.match(lastTelegramText(), /Черновик истёк/);
+});
+
+test('reply на чужое сообщение, неправильный контекст и неоднозначный ответ не склеиваются', async () => {
+  await worker.fetch(req(privateMsg('40 vnd')), env);
+  const prompt = ownBotPromptReply();
+
+  await worker.fetch(req(privateMsg('еда', {
+    reply_to_message: { ...prompt, from: { id: 222, is_bot: true } },
+  })), env);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0);
+  assert.match(lastTelegramText(), /Укажи сумму/);
+
+  await worker.fetch(req(privateMsg('еда', {
+    reply_to_message: { ...prompt, chat: { id: 77, type: 'private' } },
+  })), env);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0);
+
+  await worker.fetch(req(privateMsg('50 60', { reply_to_message: prompt })), env);
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 0);
+  assert.match(lastTelegramText(), /Ответ неполный или неоднозначный/);
+});
+
+test('полный расход в reply обрабатывается самостоятельно, даже после срока черновика', async () => {
+  await worker.fetch(req(privateMsg('кофе')), env);
+  await worker.fetch(req(privateMsg('такси 40', {
+    date: DATE + 3600,
+    reply_to_message: ownBotPromptReply(),
+  })), env);
+  assert.equal(google.tab('tg_bot').rows.length, 2);
+  assert.deepEqual(google.tab('tg_bot').rows[1].slice(1, 3), [-40, 'RUB']);
+  assert.equal(google.tab('tg_bot').rows[1][7], 'такси');
+  assert.equal(google.sheetCalls().filter((call) => call.path.endsWith(':append')).length, 1);
 });
 
 test('слишком длинный ввод отклоняется без чтения или записи Sheets', async () => {
