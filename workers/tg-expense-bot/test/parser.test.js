@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseExpense, ParseError } from '../src/parser.js';
+import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft, hasUnresolvedAmountAmbiguity } from '../src/parser.js';
 
 const parse = (text) => parseExpense(text);
 
@@ -64,6 +64,51 @@ test('VND: слова и символ', () => {
   assert.equal(parse('банан 20000 dong').currency, 'VND');
   assert.equal(parse('кофе 30000₫').currency, 'VND');
   assert.equal(parse('кофе 30000₫').description, 'кофе');
+});
+
+test('краткие суммы VND масштабируются один раз, остальные валюты не меняются', () => {
+  assert.equal(parse('40 внд еда').amount, -40000);
+  assert.equal(parse('25 vnd кофе').amount, -25000);
+  assert.equal(parse('-999 внг еда').amount, -999000);
+  assert.equal(parse('250000 vnd еда').amount, -250000);
+  assert.equal(parse('1000000 vnd аренда').amount, -1000000);
+  assert.equal(parse('40 usd еда').amount, -40);
+  assert.equal(parse('40 BND еда').currency, 'BND');
+  assert.equal(parse('40 BND еда').amount, -40);
+});
+
+test('новые и старые алиасы VND распознаются отдельными токенами', () => {
+  for (const alias of ['внд', 'внг', 'vng', 'vnd', 'донг', 'донга', 'донгов', 'dong', '₫']) {
+    const expense = parse(`еда 40 ${alias}`);
+    assert.equal(expense.currency, 'VND', alias);
+    assert.equal(expense.description, 'еда', alias);
+  }
+  const substring = parse('еда vngcoffee 40');
+  assert.equal(substring.currency, 'RUB');
+  assert.equal(substring.description, 'еда vngcoffee');
+  assert.equal(parse('еда (внг) 40').currency, 'VND');
+});
+
+test('дробные VND отклоняются явно, целые десятичные и граница 1000 безопасны', () => {
+  assert.throws(() => parse('1.5 vnd еда'), (e) => e instanceof ParseError && e.code === 'fractional_vnd' && /целое число донгов/.test(e.message));
+  assert.throws(() => parse('-40,25 внд еда'), (e) => e instanceof ParseError && e.code === 'fractional_vnd');
+  assert.equal(parse('40.0 vnd еда').amount, -40000);
+  assert.equal(parse('999 vnd еда').amount, -999000);
+  assert.equal(parse('1000 vnd еда').amount, -1000);
+  assert.equal(detectExpenseDraft('40.5 vnd'), null);
+});
+
+test('распознавание неполных черновиков и безопасное объединение ответа', () => {
+  assert.deepEqual(detectExpenseDraft('40 vnd'), { kind: 'description', text: '40 vnd' });
+  assert.deepEqual(detectExpenseDraft('еда vnd'), { kind: 'amount', text: 'еда vnd' });
+  assert.equal(completeExpenseDraft('40 vnd', 'еда', 'description').amount, -40000);
+  assert.equal(completeExpenseDraft('еда vnd', '40', 'amount').amount, -40000);
+  assert.equal(hasUnresolvedAmountAmbiguity('50 60'), true);
+  assert.equal(hasUnresolvedAmountAmbiguity('50 60 vnd'), true);
+  assert.equal(hasUnresolvedAmountAmbiguity('такси 40'), false);
+  assert.equal(hasUnresolvedAmountAmbiguity('50 000 vnd такси'), false);
+  assert.throws(() => completeExpenseDraft('40 vnd', '50', 'description'), (e) => e instanceof ParseError && e.code === 'ambiguous_reply');
+  assert.throws(() => completeExpenseDraft('еда usd', '40 vnd', 'amount'), (e) => e instanceof ParseError && e.code === 'ambiguous_reply');
 });
 
 test('валюта, слитная с суммой', () => {

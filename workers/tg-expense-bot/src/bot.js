@@ -2,13 +2,15 @@
 // режим редактирования определяется по reply на подсказку с "(стр. N, #fingerprint)".
 // Любое действие над строкой сначала сверяет fingerprint, чтобы не затронуть сдвинувшуюся строку.
 
-import { parseExpense, ParseError } from './parser.js';
+import { parseExpense, ParseError, detectExpenseDraft, completeExpenseDraft, hasUnresolvedAmountAmbiguity } from './parser.js';
 import * as sheets from './sheets.js';
 import * as tg from './telegram.js';
 import { esc, formatAmount, formatShortDate } from './format.js';
 
 const LIST_BUTTON = 'Посмотреть последние записи';
 const EDIT_MARK = /Редактирование строки \(стр\. (\d+), #([0-9a-f]{8})\)/;
+const EXPENSE_DRAFT_TTL_SECONDS = 5 * 60;
+const EXPENSE_DRAFT_MARK = /\n\[\[TG_EXPENSE_DRAFT_V1\|(description|amount)\|([^\]\r\n]+)\]\]$/;
 
 const MAIN_KEYBOARD = {
   reply_markup: { keyboard: [[{ text: LIST_BUTTON }]], resize_keyboard: true },
@@ -98,7 +100,39 @@ async function handleText(env, msg) {
   const editMatch = replyTo?.from?.is_bot ? EDIT_MARK.exec(replyTo.text ?? '') : null;
   if (editMatch) return handleEditReply(env, chatId, msg, Number(editMatch[1]), editMatch[2]);
 
+  const expenseDraft = readExpenseDraft(replyTo, chatId, env);
+  if (expenseDraft) return handleExpenseDraftReply(env, chatId, msg, expenseDraft);
+
   return handleAdd(env, chatId, msg, text);
+}
+
+function readExpenseDraft(replyTo, chatId, env) {
+  const configuredBotId = String(env.TELEGRAM_TOKEN ?? '').split(':', 1)[0];
+  if (!replyTo?.from?.is_bot || String(replyTo.from.id) !== configuredBotId || String(replyTo.chat?.id) !== String(chatId)) return null;
+  const match = EXPENSE_DRAFT_MARK.exec(replyTo.text ?? '');
+  if (!match) return null;
+  try {
+    const text = decodeURIComponent(match[2]);
+    const draft = detectExpenseDraft(text);
+    return draft?.kind === match[1] && draft.text === text ? draft : null;
+  } catch {
+    return null;
+  }
+}
+
+function expenseDraftPrompt(draft) {
+  const prompt = draft.kind === 'description' ? 'Укажи описание.' : 'Укажи сумму и валюту, если она известна.';
+  const marker = `[[TG_EXPENSE_DRAFT_V1|${draft.kind}|${encodeURIComponent(draft.text)}]]`;
+  const placeholder = draft.kind === 'description' ? 'еда' : '40 VND';
+  return {
+    text: `📝 ${prompt} Ответь на это сообщение в течение 5 минут.\nЧерновик: <code>${esc(draft.text)}</code>\n${marker}`,
+    options: { reply_markup: { force_reply: true, input_field_placeholder: placeholder } },
+  };
+}
+
+async function promptForExpenseDraft(env, chatId, draft) {
+  const prompt = expenseDraftPrompt(draft);
+  return tg.sendMessage(env, chatId, prompt.text, prompt.options);
 }
 
 async function handleAdd(env, chatId, msg, text) {
@@ -106,10 +140,54 @@ async function handleAdd(env, chatId, msg, text) {
   try {
     expense = parseExpense(text);
   } catch (err) {
-    if (err instanceof ParseError) return tg.sendMessage(env, chatId, `⚠️ ${esc(err.message)}`, MAIN_KEYBOARD);
+    if (err instanceof ParseError) {
+      if (err.code === 'missing_description' || err.code === 'missing_amount') {
+        const draft = detectExpenseDraft(text);
+        if (draft && ((err.code === 'missing_description' && draft.kind === 'description') || (err.code === 'missing_amount' && draft.kind === 'amount'))) {
+          return promptForExpenseDraft(env, chatId, draft);
+        }
+      }
+      return tg.sendMessage(env, chatId, `⚠️ ${esc(err.message)}`, MAIN_KEYBOARD);
+    }
     throw err;
   }
 
+  return saveExpense(env, chatId, msg, expense);
+}
+
+async function handleExpenseDraftReply(env, chatId, msg, draft) {
+  if (hasUnresolvedAmountAmbiguity(msg.text)) {
+    return tg.sendMessage(env, chatId, '⚠️ В ответе несколько возможных сумм. Отправь расход целиком с одной суммой.', MAIN_KEYBOARD);
+  }
+
+  let expense;
+  try {
+    // A complete operation always stands alone, even when it replies to an older prompt.
+    expense = parseExpense(msg.text);
+  } catch (err) {
+    if (!(err instanceof ParseError) || !['missing_amount', 'missing_description'].includes(err.code)) {
+      if (err instanceof ParseError) return tg.sendMessage(env, chatId, `⚠️ ${esc(err.message)}`, MAIN_KEYBOARD);
+      throw err;
+    }
+
+    const promptDate = Number(msg.reply_to_message?.date);
+    const replyDate = Number(msg.date);
+    if (!Number.isFinite(promptDate) || !Number.isFinite(replyDate) || replyDate < promptDate || replyDate - promptDate > EXPENSE_DRAFT_TTL_SECONDS) {
+      return tg.sendMessage(env, chatId, '⌛ Черновик истёк. Отправь расход целиком одним сообщением.', MAIN_KEYBOARD);
+    }
+
+    try {
+      expense = completeExpenseDraft(draft.text, msg.text, draft.kind);
+    } catch (draftError) {
+      if (draftError instanceof ParseError) return tg.sendMessage(env, chatId, `⚠️ ${esc(draftError.message)}`, MAIN_KEYBOARD);
+      throw draftError;
+    }
+  }
+
+  return saveExpense(env, chatId, msg, expense);
+}
+
+async function saveExpense(env, chatId, msg, expense) {
   await sheets.appendExpense(env, expense, new Date(msg.date * 1000));
   const reply =
     `✅ Добавлено: ${esc(expense.description)} | ${formatAmount(expense.amount)} ${expense.currency} | ${esc(expense.source)}`;
