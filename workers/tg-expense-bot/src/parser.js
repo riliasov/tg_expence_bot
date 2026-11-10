@@ -27,8 +27,8 @@ const CURRENCY = new Map(Object.entries({
   'донг': 'VND', 'донга': 'VND', 'донгов': 'VND', dong: 'VND',
 }));
 
-// Символы, которые однозначно задают валюту (остальные символы ₽ $ ₸ игнорируются, как раньше).
-const CURRENCY_SYMBOLS = new Map([['₫', 'VND']]);
+// Символы валют явно задают код и не используют валюту по умолчанию.
+const CURRENCY_SYMBOLS = new Map([['₫', 'VND'], ['₽', 'RUB'], ['$', 'USD'], ['₸', 'KZT']]);
 
 const SOURCE = new Map(Object.entries({
   'нал': 'Cash', 'наличн': 'Cash', 'наличные': 'Cash', 'наличка': 'Cash',
@@ -172,7 +172,7 @@ export function completeExpenseDraft(draftRaw, replyRaw, kind) {
     if (draft.candidates.length !== 1 || draft.description || reply.candidates.length !== 0 || reply.currencies.length !== 0 || reply.sources.length !== 0 || !reply.description) {
       throw ambiguous();
     }
-    const currency = draft.currencies[0]?.currency ?? 'RUB';
+    const currency = draft.currencies[0]?.currency ?? 'VND';
     const source = draft.sources[0]?.source;
     return parseExpense([reply.description, String(draft.candidates[0].amount), currency.toLowerCase(), source?.toLowerCase()].filter(Boolean).join(' '));
   }
@@ -188,7 +188,7 @@ export function completeExpenseDraft(draftRaw, replyRaw, kind) {
   const replySource = reply.sources[0]?.source;
   if (draftSource && replySource && draftSource !== replySource) throw ambiguous();
 
-  const currency = draftCurrency ?? replyCurrency ?? 'RUB';
+  const currency = draftCurrency ?? replyCurrency ?? 'VND';
   const source = draftSource ?? replySource;
   return parseExpense([draft.description, String(reply.candidates[0].amount), currency.toLowerCase(), source?.toLowerCase()].filter(Boolean).join(' '));
 }
@@ -238,7 +238,7 @@ export function parseExpense(raw) {
   if (new Set(sourceTokens).size > 1) throw new ParseError('Ошибка: указано несколько счетов', 'ambiguous_source');
 
   const currencyIndex = findCurrencyIndex(tokens);
-  const currency = currencyIndex >= 0 ? currencyOf(tokens[currencyIndex]) : 'RUB';
+  const currency = currencyIndex >= 0 ? currencyOf(tokens[currencyIndex]) : 'VND';
   const best = pickBestAmount(candidates, tokens, currencyIndex);
   const { source } = findSource(tokens);
 

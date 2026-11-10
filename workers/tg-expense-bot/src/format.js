@@ -8,9 +8,38 @@ export function esc(value) {
     .replace(/>/g, '&gt;');
 }
 
-/** 250 -> "250", 250.5 -> "250.5", 250.25 -> "250.25". */
+/** Adds readable space grouping without changing decimal precision. */
 export function formatAmount(amount) {
-  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2).replace(/0$/, '');
+  const value = Number(amount);
+  const raw = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0$/, '');
+  return raw.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+/** Parses Google Sheets formatted numeric cells, accepting locale separators and grouping. */
+export function parseFormattedNumber(amount) {
+  if (typeof amount === 'number') return Number.isFinite(amount) ? amount : null;
+  let value = String(amount ?? '').trim().replace(/[\s\u00a0\u202f]/g, '');
+  const comma = value.lastIndexOf(',');
+  const dot = value.lastIndexOf('.');
+  if (comma >= 0 && dot >= 0) {
+    const decimalIndex = Math.max(comma, dot);
+    const integerPart = value.slice(0, decimalIndex).replace(/[,.]/g, '');
+    const fractionalPart = value.slice(decimalIndex + 1);
+    value = `${integerPart}.${fractionalPart}`;
+  } else if (comma >= 0 || dot >= 0) {
+    const separator = comma >= 0 ? ',' : '.';
+    const trailingDigits = value.length - Math.max(comma, dot) - 1;
+    if (trailingDigits === 3) value = value.replace(/[,.]/g, '');
+    else if (separator === ',') value = value.replace(',', '.');
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+/** Telegram presents outflows as positive magnitudes while Sheets keeps signed amounts. */
+export function formatExpenseAmount(amount) {
+  const numeric = parseFormattedNumber(amount);
+  return numeric === null ? esc(String(amount ?? '')) : formatAmount(Math.abs(numeric));
 }
 
 /** Дата сообщения в строку "DD.MM.YYYY HH:MM" со сдвигом часового пояса (как в Python-версии). */
