@@ -1,3 +1,7 @@
+> ⚠️ **РЕПОЗИТОРИЙ УСТАРЕЛ. Не работать и не деплоить отсюда.**
+> Актуальный код Telegram-бота живёт в монорепозитории `riliasov/data-to-sheets` (папка `apps/telegram-bot`).
+> **Не запускать `wrangler deploy` из этого репозитория:** имя Worker (`tg-expense-bot`) совпадает с production, старый код перезапишет новый.
+
 # Telegram Expense Bot
 
 Личный Telegram-бот для ежедневного ввода расходов в Google Sheets.
